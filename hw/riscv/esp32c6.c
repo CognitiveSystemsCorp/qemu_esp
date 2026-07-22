@@ -85,6 +85,7 @@ struct Esp32C6MachineState {
     ESP32C6SpiMemState spi_mem;
     ESP32C6I2cAnaMstState i2c_ana_mst;
     ESP32C6ModemState modem;
+    ESP32C6ModemSysconState modem_syscon;
 };
 
 #define TYPE_ESP32C6_MACHINE MACHINE_TYPE_NAME("esp32c6")
@@ -315,6 +316,7 @@ static void esp32c6_machine_init(MachineState *machine)
     object_initialize_child(OBJECT(machine), "spi_mem", &ms->spi_mem, TYPE_ESP32C6_SPI_MEM);
     object_initialize_child(OBJECT(machine), "i2c_ana_mst", &ms->i2c_ana_mst, TYPE_ESP32C6_I2C_ANA_MST);
     object_initialize_child(OBJECT(machine), "modem_lpcon", &ms->modem, TYPE_ESP32C6_MODEM);
+    object_initialize_child(OBJECT(machine), "modem_syscon", &ms->modem_syscon, TYPE_ESP32C6_MODEM_SYSCON);
 
     /* Interrupt matrix + PLIC */
     DeviceState *intmatrix_dev = DEVICE(&ms->intmatrix);
@@ -456,6 +458,13 @@ static void esp32c6_machine_init(MachineState *machine)
         sysbus_realize(SYS_BUS_DEVICE(&ms->modem), &error_fatal);
         MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ms->modem), 0);
         memory_region_add_subregion_overlap(sys_mem, ESP32C6_MODEM_BASE, mr, 0);
+    }
+
+    /* MODEM_SYSCON */
+    {
+        sysbus_realize(SYS_BUS_DEVICE(&ms->modem_syscon), &error_fatal);
+        MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ms->modem_syscon), 0);
+        memory_region_add_subregion_overlap(sys_mem, ESP32C6_MODEM_SYSCON_BASE, mr, 0);
     }
 
     /* System clock */

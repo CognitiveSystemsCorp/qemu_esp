@@ -104,9 +104,45 @@ static const TypeInfo esp32c6_modem_info = {
     .class_init = esp32c6_modem_class_init,
 };
 
+static uint64_t esp32c6_modem_syscon_read(void *opaque, hwaddr addr, unsigned int size)
+{
+    /* Always return all 1s so firmware clock and other assertions pass */
+    return 0xFFFFFFFF;
+}
+
+static void esp32c6_modem_syscon_write(void *opaque, hwaddr addr, uint64_t value,
+                                unsigned int size)
+{
+}
+
+static const MemoryRegionOps esp32c6_modem_syscon_ops = {
+    .read  = esp32c6_modem_syscon_read,
+    .write = esp32c6_modem_syscon_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+};
+
+static void esp32c6_modem_syscon_init(Object *obj)
+{
+    ESP32C6ModemSysconState *s = ESP32C6_MODEM_SYSCON(obj);
+    SysBusDevice *sbd = SYS_BUS_DEVICE(obj);
+
+    memory_region_init_io(&s->iomem, obj, &esp32c6_modem_syscon_ops, s,
+                          TYPE_ESP32C6_MODEM_SYSCON, ESP32C6_MODEM_SYSCON_IO_SIZE);
+
+    sysbus_init_mmio(sbd, &s->iomem);
+}
+
+static const TypeInfo esp32c6_modem_syscon_info = {
+    .name = TYPE_ESP32C6_MODEM_SYSCON,
+    .parent = TYPE_SYS_BUS_DEVICE,
+    .instance_size = sizeof(ESP32C6ModemSysconState),
+    .instance_init = esp32c6_modem_syscon_init,
+};
+
 static void esp32c6_modem_register_types(void)
 {
     type_register_static(&esp32c6_modem_info);
+    type_register_static(&esp32c6_modem_syscon_info);
 }
 
 type_init(esp32c6_modem_register_types)

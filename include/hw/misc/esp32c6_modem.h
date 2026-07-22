@@ -17,6 +17,12 @@
 #define ESP32C6_MODEM_IO_SIZE 0x100
 #define ESP32C6_MODEM_BASE    0x600AF000
 
+#define TYPE_ESP32C6_MODEM_SYSCON "esp32c6.modem_syscon"
+#define ESP32C6_MODEM_SYSCON(obj) OBJECT_CHECK(ESP32C6ModemSysconState, (obj), TYPE_ESP32C6_MODEM_SYSCON)
+
+#define ESP32C6_MODEM_SYSCON_IO_SIZE 0x100
+#define ESP32C6_MODEM_SYSCON_BASE    0x600A9800
+
 typedef struct {
     SysBusDevice parent;
     MemoryRegion iomem;
@@ -24,3 +30,9 @@ typedef struct {
     uint32_t clk_conf_force_on;
     uint32_t rst_conf;
 } ESP32C6ModemState;
+
+typedef struct {
+    SysBusDevice parent;
+    MemoryRegion iomem;
+} ESP32C6ModemSysconState;
+
