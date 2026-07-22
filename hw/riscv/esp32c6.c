@@ -37,6 +37,8 @@
 #include "hw/misc/esp32c6_i2c_ana_mst.h"
 #include "hw/misc/esp32c6_jtag.h"
 #include "hw/misc/esp32c6_modem.h"
+#include "hw/misc/esp32c6_wifi.h"
+#include "hw/misc/esp32_phya.h"
 #include "hw/misc/unimp.h"
 #include "hw/char/esp32c6_uart.h"
 #include "hw/gpio/esp32c6_gpio.h"
@@ -86,6 +88,9 @@ struct Esp32C6MachineState {
     ESP32C6I2cAnaMstState i2c_ana_mst;
     ESP32C6ModemState modem;
     ESP32C6ModemSysconState modem_syscon;
+    Esp32WifiState wifi;
+    Esp32PhyaState phya;
+    Esp32PhyaState rfbb;
 };
 
 #define TYPE_ESP32C6_MACHINE MACHINE_TYPE_NAME("esp32c6")
@@ -317,6 +322,9 @@ static void esp32c6_machine_init(MachineState *machine)
     object_initialize_child(OBJECT(machine), "i2c_ana_mst", &ms->i2c_ana_mst, TYPE_ESP32C6_I2C_ANA_MST);
     object_initialize_child(OBJECT(machine), "modem_lpcon", &ms->modem, TYPE_ESP32C6_MODEM);
     object_initialize_child(OBJECT(machine), "modem_syscon", &ms->modem_syscon, TYPE_ESP32C6_MODEM_SYSCON);
+    object_initialize_child(OBJECT(machine), "wifi", &ms->wifi, TYPE_ESP32C6_WIFI);
+    object_initialize_child(OBJECT(machine), "phya", &ms->phya, TYPE_ESP32_PHYA);
+    object_initialize_child(OBJECT(machine), "rfbb", &ms->rfbb, TYPE_ESP32_PHYA);
 
     /* Interrupt matrix + PLIC */
     DeviceState *intmatrix_dev = DEVICE(&ms->intmatrix);
@@ -465,6 +473,42 @@ static void esp32c6_machine_init(MachineState *machine)
         sysbus_realize(SYS_BUS_DEVICE(&ms->modem_syscon), &error_fatal);
         MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ms->modem_syscon), 0);
         memory_region_add_subregion_overlap(sys_mem, ESP32C6_MODEM_SYSCON_BASE, mr, 0);
+    }
+
+    /* WiFi */
+    {
+        NICInfo *nd = qemu_find_nic_info(TYPE_ESP32C6_WIFI, false, NULL);
+        uint8_t *efuse_mac = (uint8_t *)
+            &ms->efuse.parent.parent.efuses.blocks.rd_mac_spi_sys_0;
+
+        /* ESP eFuse stores the factory MAC in reverse byte order. */
+        for (int i = 0; i < sizeof(ms->wifi.macaddr); i++) {
+            ms->wifi.macaddr[i] = efuse_mac[5 - i];
+        }
+
+        if (nd) {
+            qdev_set_nic_properties(DEVICE(&ms->wifi), nd);
+        }
+        sysbus_realize(SYS_BUS_DEVICE(&ms->wifi), &error_fatal);
+        MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ms->wifi), 0);
+        memory_region_add_subregion_overlap(sys_mem, 0x600a4000, mr, 0);
+        sysbus_connect_irq(SYS_BUS_DEVICE(&ms->wifi), 0,
+                           qdev_get_gpio_in(DEVICE(&ms->intmatrix), 0 /* WIFI_MAC_INTR_SOURCE */));
+    }
+
+    /* PHYA */
+    {
+        sysbus_realize(SYS_BUS_DEVICE(&ms->phya), &error_fatal);
+        MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ms->phya), 0);
+        /* C6 ROM RF/BB calibration status block. */
+        memory_region_add_subregion_overlap(sys_mem, 0x600ad000, mr, 0);
+    }
+
+    /* Undocumented C6 RF/baseband calibration register block. */
+    {
+        sysbus_realize(SYS_BUS_DEVICE(&ms->rfbb), &error_fatal);
+        MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ms->rfbb), 0);
+        memory_region_add_subregion_overlap(sys_mem, 0x600a0000, mr, 0);
     }
 
     /* System clock */
