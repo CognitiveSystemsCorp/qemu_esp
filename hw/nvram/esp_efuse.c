@@ -142,6 +142,12 @@ static void esp_efuse_reload_from_blk(ESPEfuseState *s)
         memcpy(&s->efuses.blocks, s->mirror, size);
     }
 
+    if (s->factory_mac_override_valid) {
+        memcpy(&s->efuses.blocks.rd_mac_spi_sys_0,
+               s->factory_mac_override,
+               sizeof(s->factory_mac_override));
+    }
+
     /* Copy the efuses to the internal mirror */
     memcpy(&s->efuses_internal.blocks, &s->efuses.blocks, size);
 }

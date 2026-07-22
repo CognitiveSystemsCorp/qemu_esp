@@ -77,6 +77,7 @@ struct Esp32C6MachineState {
     ESP32C6GPIOState gpio;
     ESP32C6CacheState cache;
     ESP32C6EfuseState efuse;
+    MemoryRegion efuse_mac_alias;
     ESP32C6ClockState clock;
     ESP32C6TimgState timg[2];
     ESP32C6SysTimerState systimer;
@@ -404,6 +405,37 @@ static void esp32c6_machine_init(MachineState *machine)
         sysbus_realize(SYS_BUS_DEVICE(&ms->efuse), &error_fatal);
         MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ms->efuse), 0);
         memory_region_add_subregion_overlap(sys_mem, DR_REG_EFUSE_BASE, mr, 0);
+
+        /*
+         * IDF's 512-byte QEMU eFuse image stores the factory MAC at 0x165,
+         * while the unified eFuse device uses a compact block layout.  Import
+         * the MAC into Block 1 and expose only its read registers over the
+         * broad LP peripheral catch-all.
+         */
+        if (ms->efuse.parent.parent.blk) {
+            ESPEfuseState *efuse = &ms->efuse.parent.parent;
+            uint8_t raw_mac[6] = { 0 };
+            uint8_t *block_mac = (uint8_t *)
+                &efuse->efuses.blocks.rd_mac_spi_sys_0;
+            uint8_t *internal_mac = (uint8_t *)
+                &efuse->efuses_internal.blocks.rd_mac_spi_sys_0;
+
+            if (blk_pread(efuse->blk, 0x165,
+                          sizeof(raw_mac), raw_mac, 0) == 0 &&
+                memcmp(raw_mac, (uint8_t[6]) { 0 }, sizeof(raw_mac))) {
+                memcpy(efuse->factory_mac_override, raw_mac,
+                       sizeof(raw_mac));
+                efuse->factory_mac_override_valid = true;
+                memcpy(block_mac, raw_mac, sizeof(raw_mac));
+                memcpy(internal_mac, raw_mac, sizeof(raw_mac));
+            }
+        }
+
+        memory_region_init_alias(&ms->efuse_mac_alias, OBJECT(machine),
+                                 "esp32c6.efuse.mac", mr, 0x44, 8);
+        memory_region_add_subregion_overlap(sys_mem,
+                                            DR_REG_EFUSE_BASE + 0x44,
+                                            &ms->efuse_mac_alias, 1);
         sysbus_connect_irq(SYS_BUS_DEVICE(&ms->efuse), 0,
                            qdev_get_gpio_in(intmatrix_dev, C6_ETS_EFUSE_INTR_SOURCE));
     }
@@ -505,7 +537,6 @@ static void esp32c6_machine_init(MachineState *machine)
     /* WiFi */
     {
         NICInfo *nd = qemu_find_nic_info(TYPE_ESP32C6_WIFI, false, NULL);
-#if 1
         uint8_t *efuse_mac = (uint8_t *)
             &ms->efuse.parent.parent.efuses.blocks.rd_mac_spi_sys_0;
 
@@ -513,7 +544,6 @@ static void esp32c6_machine_init(MachineState *machine)
         for (int i = 0; i < sizeof(ms->wifi.macaddr); i++) {
             ms->wifi.macaddr[i] = efuse_mac[5 - i];
         }
-#endif
 
         if (nd) {
             qdev_set_nic_properties(DEVICE(&ms->wifi), nd);

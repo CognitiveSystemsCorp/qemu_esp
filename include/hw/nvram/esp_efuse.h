@@ -213,6 +213,10 @@ typedef struct ESPEfuseState {
     /* Same efuses as the ones above, but protected blocks are not cleared.
      * This will be used by C3 emulated encryption modules */
     ESPEfuseRegs efuses_internal;
+
+    /* Optional target-specific translation from an external eFuse image. */
+    uint8_t factory_mac_override[6];
+    bool factory_mac_override_valid;
 } ESPEfuseState;
 
 typedef struct ESPEfuseClass {
