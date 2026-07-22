@@ -39,6 +39,12 @@
 #define ESP32C6_WIFI_TXQ_COMPLETE_BASE 0x14e8
 #define ESP32C6_WIFI_TXQ_COMPLETE_STRIDE 0x74
 #define ESP32C6_WIFI_RX_DESC_RELOAD 0x80
+#define ESP32C6_WIFI_RX_DESC_SIZE_MASK 0x3fff
+#define ESP32C6_WIFI_RX_DESC_LENGTH_SHIFT 14
+#define ESP32C6_WIFI_RX_DESC_LENGTH_MASK \
+    (ESP32C6_WIFI_RX_DESC_SIZE_MASK << ESP32C6_WIFI_RX_DESC_LENGTH_SHIFT)
+#define ESP32C6_WIFI_RX_DESC_EOF BIT(30)
+#define ESP32C6_WIFI_RX_DESC_OWNER BIT(31)
 
 static int8_t esp32c6_wifi_csi_clamp(double value)
 {
@@ -307,11 +313,6 @@ static void esp32C3_wifi_write(void *opaque, hwaddr addr, uint64_t value,
     s->mem[addr/4]=value;
 }
 
-static int match_mac_address(uint8_t *a1,uint8_t *a2) {
-    if(!memcmp(a1,a2,6)) return 1;
-    if(!memcmp(a1,BROADCAST,6)) return 1;
-    return 0;
-}
 // frame from ap to esp32
 void Esp32_sendFrame(Esp32WifiState *s, mac80211_frame *frame,int length, int signal_strength) {
     if (DEBUG) {
@@ -328,7 +329,8 @@ void Esp32_sendFrame(Esp32WifiState *s, mac80211_frame *frame,int length, int si
     /* ESP32-C6 MAC v3 hardware RX-control layout (92 bytes). */
     header[0] = signal_strength + (rand() % 10) - 60;
     header[1] = 0; /* 1 Mbps DSSS */
-    header[3] = 0xf0; /* Match all four configured virtual interfaces. */
+    /* Report exactly the active virtual interface, as real MAC filtering does. */
+    header[3] = s->mode == Esp32_Mode_Station ? BIT(4) : BIT(5);
     stl_le_p(header + 12, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) / 1000);
     header[20] = (uint8_t)-97;
     header[21] = esp32_wifi_channel;
@@ -338,17 +340,6 @@ void Esp32_sendFrame(Esp32WifiState *s, mac80211_frame *frame,int length, int si
     if (frame->destination_address[0] & 1) {
         header[11] |= BIT(7); /* is_group */
     }
-
-    // These 4 bits are set if the mac addresses previously stored at 0x40 and 0x48
-    // match the destination or bssid addresses in the frame
-    if(match_mac_address(frame->destination_address,(uint8_t *)s->mem+0x40))
-        header[3] |= BIT(4);
-    if(match_mac_address(frame->destination_address,(uint8_t *)s->mem+0x48))
-        header[3] |= BIT(5);
-    if(match_mac_address(frame->bssid_address,(uint8_t *)s->mem+0x40))
-        header[3] |= BIT(4);
-    if(match_mac_address(frame->bssid_address,(uint8_t *)s->mem+0x48))
-        header[3] |= BIT(5);
 
     if (csi_len) {
         uint32_t *csi_info = (uint32_t *)(header + 28);
@@ -380,20 +371,47 @@ void Esp32_sendFrame(Esp32WifiState *s, mac80211_frame *frame,int length, int si
            frame, length);
 
     // do a DMA transfer from the hardware to esp32 memory
-    dma_list_item item;
-    address_space_read(&address_space_memory, s->dma_inlink_address, MEMTXATTRS_UNSPECIFIED, &item, 12);
+    uint8_t desc[12];
+    uint32_t desc_ctrl;
+    uint32_t desc_size;
+    uint32_t buffer_addr;
+    uint32_t next_desc;
+
+    address_space_read(&address_space_memory, s->dma_inlink_address,
+                       MEMTXATTRS_UNSPECIFIED, desc, sizeof(desc));
+    desc_ctrl = ldl_le_p(desc);
+    desc_size = desc_ctrl & ESP32C6_WIFI_RX_DESC_SIZE_MASK;
+    buffer_addr = ldl_le_p(desc + 4);
+    next_desc = ldl_le_p(desc + 8);
     if (DEBUG) {
         printf("esp32c6 RX desc ctrl=%03x/%03x owner=%u addr=%08x next=%08x\n",
-               item.size, item.length, item.owner, item.address, item.next);
+               desc_size,
+               (desc_ctrl & ESP32C6_WIFI_RX_DESC_LENGTH_MASK) >>
+                   ESP32C6_WIFI_RX_DESC_LENGTH_SHIFT,
+               !!(desc_ctrl & ESP32C6_WIFI_RX_DESC_OWNER), buffer_addr,
+               next_desc);
     }
-    address_space_write(&address_space_memory, item.address, MEMTXATTRS_UNSPECIFIED, header, total_len);
-    item.length=total_len;
-    item.eof=1;
-    address_space_write(&address_space_memory, s->dma_inlink_address, MEMTXATTRS_UNSPECIFIED,&item,4);
-    s->mem[0x88 / 4] = item.next;
+    if (total_len > desc_size) {
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "esp32c6_wifi: RX frame %d exceeds descriptor size %u\n",
+                      total_len, desc_size);
+        free(header);
+        return;
+    }
+    address_space_write(&address_space_memory, buffer_addr,
+                        MEMTXATTRS_UNSPECIFIED, header, total_len);
+    desc_ctrl &= ~(ESP32C6_WIFI_RX_DESC_LENGTH_MASK |
+                   ESP32C6_WIFI_RX_DESC_EOF |
+                   ESP32C6_WIFI_RX_DESC_OWNER);
+    desc_ctrl |= (uint32_t)total_len << ESP32C6_WIFI_RX_DESC_LENGTH_SHIFT;
+    desc_ctrl |= ESP32C6_WIFI_RX_DESC_EOF;
+    stl_le_p(desc, desc_ctrl);
+    address_space_write(&address_space_memory, s->dma_inlink_address,
+                        MEMTXATTRS_UNSPECIFIED, desc, sizeof(desc_ctrl));
+    s->mem[0x88 / 4] = next_desc;
     s->mem[0x8c / 4] = s->dma_inlink_address & 0x000fffff;
     s->mem[0xc70 / 4] = s->dma_inlink_address & 0xfff00000;
-    s->dma_inlink_address=item.next;
+    s->dma_inlink_address = next_desc;
     set_interrupt(s, BIT(14)); /* C6 MAC RX-success event */
     free(header);
 }

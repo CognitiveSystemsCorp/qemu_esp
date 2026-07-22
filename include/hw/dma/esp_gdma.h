@@ -129,6 +129,7 @@ typedef struct ESPGdmaClass {
 
     /* All the attributes and method that are common to all instances must be stored here */
     size_t m_channel_count;
+    uint32_t ram_addr;
 
     /* Virtual methods */
     /**

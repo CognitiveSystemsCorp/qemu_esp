@@ -79,7 +79,7 @@ void Esp32_WLAN_init_ap_frame(Esp32WifiState *s, mac80211_frame *frame) {
 }
 
 static mac80211_frame *new_frame(unsigned type, unsigned subtype) {
-    mac80211_frame *frame = (mac80211_frame *)malloc(sizeof(mac80211_frame));
+    mac80211_frame *frame = g_new0(mac80211_frame, 1);
     frame->next_frame = NULL;
     frame->frame_control.protocol_version = 0;
     frame->frame_control.type = type;

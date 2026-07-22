@@ -249,10 +249,12 @@ static inline bool esp_gdma_next_list_node(ESPGdmaState *s, uint32_t chan, uint3
  */
 static void esp_gdma_get_restart_buffer(ESPGdmaState *s, uint32_t chan, uint32_t dir, uint32_t* out)
 {
+    const ESPGdmaClass *class = ESP_GDMA_GET_CLASS(s);
     DmaConfigState* state = &s->ch_conf[dir][chan];
     // GdmaLinkedList* list = NULL;
     /* The next node to use is taken from state->state's lowest 18 bit. Append it to the DRAM address */
-    const uint32_t dram_upper_bits = ESP_GDMA_RAM_ADDR & (~R_GDMA_OUT_STATE_LINK_DSCR_ADDR_MASK);
+    const uint32_t dram_upper_bits = class->ram_addr &
+                                     (~R_GDMA_OUT_STATE_LINK_DSCR_ADDR_MASK);
     const uint32_t guest_addr = dram_upper_bits | FIELD_EX32(state->state, GDMA_OUT_STATE, LINK_DSCR_ADDR);
 
     *out = guest_addr;
@@ -275,10 +277,18 @@ bool esp_gdma_get_channel_periph(ESPGdmaState *s, GdmaPeripheral periph, int dir
 
     /* Check all the channels of the GDMA */
     for (int i = 0; i < class->m_channel_count; i++) {
+        const uint32_t link = s->ch_conf[dir][i].link;
+        const bool started = dir == ESP_GDMA_OUT_IDX ?
+            (FIELD_EX32(link, GDMA_OUT_LINK, START) ||
+             FIELD_EX32(link, GDMA_OUT_LINK, RESTART)) :
+            (FIELD_EX32(link, GDMA_IN_LINK, START) ||
+             FIELD_EX32(link, GDMA_IN_LINK, RESTART));
+
         /* IN/OUT PERI registers have the same organization, can use any macro.
          * Look for the channel that was configured with the given peripheral. It must be marked as "started" too */
-        if ( FIELD_EX32(s->ch_conf[dir][i].peripheral, GDMA_PERI_SEL, PERI_SEL) == periph ||
-             FIELD_EX32(s->ch_conf[dir][i].link, GDMA_OUT_LINK, START)) {
+        if (FIELD_EX32(s->ch_conf[dir][i].peripheral,
+                       GDMA_PERI_SEL, PERI_SEL) == periph &&
+            started) {
 
             *chan = i;
             return true;
@@ -295,6 +305,7 @@ bool esp_gdma_get_channel_periph(ESPGdmaState *s, GdmaPeripheral periph, int dir
  */
 bool esp_gdma_read_channel(ESPGdmaState *s, uint32_t chan, uint8_t* buffer, uint32_t size)
 {
+    const ESPGdmaClass *class = ESP_GDMA_GET_CLASS(s);
     DmaConfigState* state = &s->ch_conf[ESP_GDMA_OUT_IDX][chan];
 
     state->link &= R_GDMA_OUT_LINK_ADDR_MASK;
@@ -304,7 +315,8 @@ bool esp_gdma_read_channel(ESPGdmaState *s, uint32_t chan, uint8_t* buffer, uint
                                              R_GDMA_INTERRUPT_OUT_EOF_MASK);
 
     /* Get the guest DRAM address */
-    uint32_t out_addr = ((ESP_GDMA_RAM_ADDR >> 20) << 20) | FIELD_EX32(state->link, GDMA_OUT_LINK, ADDR);
+    uint32_t out_addr = (class->ram_addr & 0xfff00000) |
+                        FIELD_EX32(state->link, GDMA_OUT_LINK, ADDR);
 
     /* Boolean to mark whether we need to check the owner for in and out buffers */
     const bool owner_check_out = FIELD_EX32(state->conf1, GDMA_OUT_CONF1, CHECK_OWNER);
@@ -407,6 +419,7 @@ bool esp_gdma_read_channel(ESPGdmaState *s, uint32_t chan, uint8_t* buffer, uint
  */
 bool esp_gdma_write_channel(ESPGdmaState *s, uint32_t chan, uint8_t* buffer, uint32_t size)
 {
+    const ESPGdmaClass *class = ESP_GDMA_GET_CLASS(s);
     DmaConfigState* state = &s->ch_conf[ESP_GDMA_IN_IDX][chan];
 
     /* Clear the (RE)START fields, i.e., only keep the link address */
@@ -417,7 +430,8 @@ bool esp_gdma_write_channel(ESPGdmaState *s, uint32_t chan, uint8_t* buffer, uin
                                              R_GDMA_INTERRUPT_IN_SUC_EOF_MASK);
 
     /* Get highest 12 bits of the DRAM address */
-    uint32_t in_addr = ((ESP_GDMA_RAM_ADDR >> 20) << 20) | FIELD_EX32(state->link, GDMA_IN_LINK, ADDR);
+    uint32_t in_addr = (class->ram_addr & 0xfff00000) |
+                       FIELD_EX32(state->link, GDMA_IN_LINK, ADDR);
 
     /* Boolean to mark whether we need to check the owner for in buffers */
     const bool owner_check_in = FIELD_EX32(state->conf1, GDMA_IN_CONF1, CHECK_OWNER);
@@ -537,6 +551,7 @@ bool esp_gdma_write_channel(ESPGdmaState *s, uint32_t chan, uint8_t* buffer, uin
  */
 static void esp_gdma_check_and_start_mem_transfer(ESPGdmaState *s, uint32_t chan)
 {
+    const ESPGdmaClass *class = ESP_GDMA_GET_CLASS(s);
     DmaConfigState* state_in  = &s->ch_conf[ESP_GDMA_IN_IDX][chan];
     DmaConfigState* state_out = &s->ch_conf[ESP_GDMA_OUT_IDX][chan];
     /* Keep the distinction between start and restart because it influences the first descriptor to process */
@@ -563,7 +578,7 @@ static void esp_gdma_check_and_start_mem_transfer(ESPGdmaState *s, uint32_t chan
                               R_GDMA_INTERRUPT_OUT_EOF_MASK  );
 
         /* Get highest 12 bits of the DRAM address */
-        const uint32_t high = (ESP_GDMA_RAM_ADDR >> 20) << 20;
+        const uint32_t high = class->ram_addr & 0xfff00000;
 
         /* TODO: in an inlink, when burst mode is enabled, size and buffer address must be word-aligned. */
         /* If a start was performed, the first descriptor address to process is in DMA_OUT_LINK_CHn register,
@@ -1000,7 +1015,9 @@ static void esp_gdma_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
     ResettableClass *rc = RESETTABLE_CLASS(klass);
+    ESPGdmaClass *gdma_class = ESP_GDMA_CLASS(klass);
 
+    gdma_class->ram_addr = ESP_GDMA_RAM_ADDR;
     rc->phases.hold = esp_gdma_reset_hold;
     dc->realize = esp_gdma_realize;
     device_class_set_props(dc, esp_gdma_properties);

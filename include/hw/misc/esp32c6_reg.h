@@ -65,6 +65,8 @@
 #define C6_ETS_DMA_OUT_CH1_INTR_SOURCE          70
 #define C6_ETS_DMA_OUT_CH2_INTR_SOURCE          71
 #define C6_ETS_SPI2_INTR_SOURCE                 72
+#define C6_ETS_AES_INTR_SOURCE                   73
 #define C6_ETS_SHA_INTR_SOURCE                   74
+#define C6_ETS_RSA_INTR_SOURCE                   75
 
 #define ESP32C6_INT_MATRIX_INPUTS               77

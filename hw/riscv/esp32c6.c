@@ -47,6 +47,8 @@
 #include "hw/riscv/esp32c6_intmatrix.h"
 #include "hw/misc/esp32c6_intpri.h"
 #include "hw/misc/esp32c6_sha.h"
+#include "hw/misc/esp32c3_aes.h"
+#include "hw/misc/esp32c3_rsa.h"
 #include "hw/timer/esp32c6_timg.h"
 #include "hw/timer/esp32c6_systimer.h"
 #include "hw/ssi/esp32c6_spi.h"
@@ -80,7 +82,9 @@ struct Esp32C6MachineState {
     ESP32C6SysTimerState systimer;
     ESP32C6SpiState spi1;
     ESP32C6GdmaState gdma;
+    ESP32C3AesState aes;
     ESP32C6ShaState sha;
+    ESP32C3RsaState rsa;
     ESP32C6UsbJtagState jtag;
     ESP32C6PcrState pcr;
     ESP32C6LpState lp;
@@ -310,7 +314,9 @@ static void esp32c6_machine_init(MachineState *machine)
     object_initialize_child(OBJECT(machine), "efuse", &ms->efuse, TYPE_ESP32C6_EFUSE);
     object_initialize_child(OBJECT(machine), "clock", &ms->clock, TYPE_ESP32C6_CLOCK);
     object_initialize_child(OBJECT(machine), "gdma", &ms->gdma, TYPE_ESP32C6_GDMA);
+    object_initialize_child(OBJECT(machine), "aes", &ms->aes, TYPE_ESP32C3_AES);
     object_initialize_child(OBJECT(machine), "sha", &ms->sha, TYPE_ESP32C6_SHA);
+    object_initialize_child(OBJECT(machine), "rsa", &ms->rsa, TYPE_ESP32C3_RSA);
     object_initialize_child(OBJECT(machine), "timg0", &ms->timg[0], TYPE_ESP32C6_TIMG);
     object_initialize_child(OBJECT(machine), "timg1", &ms->timg[1], TYPE_ESP32C6_TIMG);
     object_initialize_child(OBJECT(machine), "systimer", &ms->systimer, TYPE_ESP32C6_SYSTIMER);
@@ -461,6 +467,27 @@ static void esp32c6_machine_init(MachineState *machine)
                            qdev_get_gpio_in(intmatrix_dev, C6_ETS_SHA_INTR_SOURCE));
     }
 
+    /* ESP32-C6 and ESP32-C3 use the same AES register layout. */
+    {
+        ms->aes.parent.gdma = ESP_GDMA(&ms->gdma);
+        sysbus_realize(SYS_BUS_DEVICE(&ms->aes), &error_fatal);
+        MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ms->aes), 0);
+        memory_region_add_subregion_overlap(sys_mem, DR_REG_AES_BASE, mr, 0);
+        sysbus_connect_irq(SYS_BUS_DEVICE(&ms->aes), 0,
+                           qdev_get_gpio_in(intmatrix_dev,
+                                           C6_ETS_AES_INTR_SOURCE));
+    }
+
+    /* ESP32-C6 and ESP32-C3 use the same 3072-bit RSA register layout. */
+    {
+        sysbus_realize(SYS_BUS_DEVICE(&ms->rsa), &error_fatal);
+        MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ms->rsa), 0);
+        memory_region_add_subregion_overlap(sys_mem, DR_REG_RSA_BASE, mr, 0);
+        sysbus_connect_irq(SYS_BUS_DEVICE(&ms->rsa), 0,
+                           qdev_get_gpio_in(intmatrix_dev,
+                                           C6_ETS_RSA_INTR_SOURCE));
+    }
+
     /* MODEM_LPCON (modem clock control) */
     {
         sysbus_realize(SYS_BUS_DEVICE(&ms->modem), &error_fatal);
@@ -478,6 +505,7 @@ static void esp32c6_machine_init(MachineState *machine)
     /* WiFi */
     {
         NICInfo *nd = qemu_find_nic_info(TYPE_ESP32C6_WIFI, false, NULL);
+#if 1
         uint8_t *efuse_mac = (uint8_t *)
             &ms->efuse.parent.parent.efuses.blocks.rd_mac_spi_sys_0;
 
@@ -485,6 +513,7 @@ static void esp32c6_machine_init(MachineState *machine)
         for (int i = 0; i < sizeof(ms->wifi.macaddr); i++) {
             ms->wifi.macaddr[i] = efuse_mac[5 - i];
         }
+#endif
 
         if (nd) {
             qdev_set_nic_properties(DEVICE(&ms->wifi), nd);

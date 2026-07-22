@@ -76,8 +76,7 @@ static void Esp32_WLAN_beacon_timer(void *opaque)
     Esp32WifiState *s = (Esp32WifiState *)opaque;
     // only send a beacon if we are an access point
     if((ENABLE_BEACON)&&(s->mode == Esp32_Mode_Station)){
-      if (s->ap_state != Esp32_WLAN__STATE_ASSOCIATED &&
-          s->ap_state != Esp32_WLAN__STATE_STA_ASSOCIATED) {
+      if(s->ap_state!=Esp32_WLAN__STATE_STA_ASSOCIATED) {
         for(int i=0;i<nb_aps;i++){
           int ap = (i + s->beacon_ap)%nb_aps;
           if (access_points[ap].channel==esp32_wifi_channel) {
@@ -105,7 +104,7 @@ static void Esp32_WLAN_inject_timer(void *opaque)
         s->inject_queue_size--;
         s->inject_queue = frame->next_frame;
         Esp32_sendFrame(s, (void *)frame, frame->frame_length,frame->signal_strength);
-        free(frame);
+        g_free(frame);
     }
     if (s->inject_queue_size > 0) {
         // there are more packets... schedule
@@ -354,6 +353,7 @@ static ssize_t Esp32_WLAN_receive(NetClientState *ncs,
 {
     Esp32WifiState *s = qemu_get_nic_opaque(ncs);
     struct mac80211_frame *frame;
+    size_t wireless_size = size;
     if (!Esp32_WLAN_can_receive(ncs)) {
         // this should not happen, but in
         // case it does, let's simply drop
@@ -364,12 +364,27 @@ static ssize_t Esp32_WLAN_receive(NetClientState *ncs,
     if (!s) {
         return -1;
     }
+
+    /* Ethernet minimum-frame padding is not carried in an 802.11 MSDU. */
+    if (size >= 34 && buf[12] == 0x08 && buf[13] == 0x00) {
+        size_t ip_size = 14 + (((size_t)buf[16] << 8) | buf[17]);
+
+        if (ip_size >= 34 && ip_size <= size) {
+            wireless_size = ip_size;
+        }
+    } else if (size >= 42 && buf[12] == 0x08 && buf[13] == 0x06) {
+        size_t arp_size = 14 + 8 + 2 * ((size_t)buf[18] + buf[19]);
+
+        if (arp_size >= 42 && arp_size <= size) {
+            wireless_size = arp_size;
+        }
+    }
     /*
      * A 802.3 packet comes from the qemu network. The
      * access points turns it into a 802.11 frame and
      * forwards it to the wireless device
      */
-    frame = Esp32_WLAN_create_data_packet(s, buf, size);
+    frame = Esp32_WLAN_create_data_packet(s, buf, wireless_size);
     if (frame) {
         if(s->mode == Esp32_Mode_Station){
              memcpy(s->ap_macaddr,s->associated_ap_macaddr,6);
@@ -498,6 +513,11 @@ static ssize_t Esp32_WLAN_receive(NetClientState *ncs,
           return size; 
         }
         Esp32_WLAN_init_ap_frame(s, frame);
+        if (frame->frame_control.type == IEEE80211_TYPE_DATA &&
+            (frame->frame_control.flags & 0x2)) {
+            /* In a From-DS frame address 3 is the Ethernet source. */
+            memcpy(frame->bssid_address, &buf[6], 6);
+        }
         Esp32_WLAN_insert_frame(s, frame);
     }
     return size;
@@ -783,29 +803,26 @@ void Esp32_WLAN_handle_frame(Esp32WifiState *s, struct mac80211_frame *frame)
             ethernet_frame[12] = frame->data_and_fcs[6];
             ethernet_frame[13] = frame->data_and_fcs[7];
 
-            // the new originator of the packet is
-            // the access point
-            if(s->ap_state == Esp32_WLAN__STATE_ASSOCIATED)
-                memcpy(&ethernet_frame[6], s->ap_macaddr, 6);
-            else
-                memcpy(&ethernet_frame[6], s->macaddr, 6);
-
-            if (ethernet_frame[12] == 0x08 && ethernet_frame[13] == 0x06) {
-                // for arp request, we use a broadcast
-                memset(&ethernet_frame[0], 0xff, 6);
+            /* A To-DS frame carries DA in address 3 and SA in address 2. */
+            memcpy(&ethernet_frame[6], frame->source_address, 6);
+            if (frame->frame_control.flags & 0x1) {
+                memcpy(&ethernet_frame[0], frame->bssid_address, 6);
             } else {
-                // otherwise we forward the packet to
-                // where it really belongs
                 memcpy(&ethernet_frame[0], frame->destination_address, 6);
             }
 
-            // add packet content
-            ethernet_frame_size = frame->frame_length - IEEE80211_HEADER_SIZE - 4 - 8;
-
-            // for some reason, the packet is 22 bytes too small (??)
-            ethernet_frame_size += 22;
-            if (ethernet_frame_size > sizeof(ethernet_frame)) {
-                ethernet_frame_size = sizeof(ethernet_frame);
+            /*
+             * Strip the 802.11 header, eight-byte LLC/SNAP header, and FCS.
+             * The previous extra 22 bytes over-read the MPDU and passed stale
+             * stack data to slirp as packet payload.
+             */
+            if (frame->frame_length < IEEE80211_HEADER_SIZE + 8 + 4) {
+                goto frame_delivered;
+            }
+            ethernet_frame_size = frame->frame_length -
+                                  IEEE80211_HEADER_SIZE - 8 - 4;
+            if (ethernet_frame_size > sizeof(ethernet_frame) - 14) {
+                ethernet_frame_size = sizeof(ethernet_frame) - 14;
             }
             memcpy(&ethernet_frame[14], &frame->data_and_fcs[8], ethernet_frame_size);
             // add size of ethernet header
@@ -816,5 +833,6 @@ void Esp32_WLAN_handle_frame(Esp32WifiState *s, struct mac80211_frame *frame)
             qemu_send_packet(qemu_get_queue(s->nic), ethernet_frame, ethernet_frame_size);
         }
     }
+frame_delivered:
     Esp32_WLAN_frame_delivered(s);
 }
