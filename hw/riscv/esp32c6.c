@@ -537,6 +537,7 @@ static void esp32c6_machine_init(MachineState *machine)
     /* WiFi */
     {
         NICInfo *nd = qemu_find_nic_info(TYPE_ESP32C6_WIFI, false, NULL);
+        NICInfo *espnow_nd = qemu_find_nic_info(TYPE_ESP32_WIFI, false, NULL);
         uint8_t *efuse_mac = (uint8_t *)
             &ms->efuse.parent.parent.efuses.blocks.rd_mac_spi_sys_0;
 
@@ -547,6 +548,14 @@ static void esp32c6_machine_init(MachineState *machine)
 
         if (nd) {
             qdev_set_nic_properties(DEVICE(&ms->wifi), nd);
+        }
+        if (espnow_nd) {
+            /*
+             * ESP-NOW action frames use the second, raw socket backend.  It
+             * intentionally has the legacy esp32_wifi model name so it is
+             * kept separate from the station's slirp-backed C6 NIC.
+             */
+            Esp32_WLAN_set_espnow_backend(&ms->wifi, espnow_nd);
         }
         sysbus_realize(SYS_BUS_DEVICE(&ms->wifi), &error_fatal);
         MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ms->wifi), 0);

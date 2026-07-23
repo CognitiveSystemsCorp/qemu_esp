@@ -15,10 +15,12 @@
 
 #define DEBUG 0
 
-#define ESP32C6_WIFI_RX_CTRL_HW_LEN 44
-#define ESP32C6_WIFI_CSI_LEN_SHIFT 8
-#define ESP32C6_WIFI_CSI_LEN_MASK (0x3ffU << ESP32C6_WIFI_CSI_LEN_SHIFT)
+#define ESP32C6_WIFI_RX_CTRL_LEN 92
+#define ESP32C6_WIFI_RX_CTRL_CSI_OFFSET 84
 #define ESP32C6_WIFI_CSI_LEN 128
+#define ESP32C6_WIFI_CSI_LEN_LOW_OFFSET 33
+#define ESP32C6_WIFI_CSI_LEN_HIGH_OFFSET 34
+#define ESP32C6_WIFI_CSI_VALID BIT(2)
 #define ESP32C6_WIFI_FFT_GAIN_OFFSET 22
 #define ESP32C6_WIFI_AGC_GAIN_OFFSET 23
 #define ESP32C6_WIFI_DEFAULT_FFT_GAIN 2
@@ -321,53 +323,72 @@ void Esp32_sendFrame(Esp32WifiState *s, mac80211_frame *frame,int length, int si
     }
     if(s->dma_inlink_address==0) return;
 
-    int csi_len = 0;
-    int total_len = 92 + length;
+    bool is_mgmt = frame->frame_control.type == IEEE80211_TYPE_MGT;
+    bool is_beacon = is_mgmt && frame->frame_control.sub_type ==
+                     IEEE80211_TYPE_MGT_SUBTYPE_BEACON;
+    bool is_espnow = is_mgmt && frame->frame_control.sub_type ==
+                     IEEE80211_TYPE_MGT_SUBTYPE_ACTION;
+    bool has_csi = is_beacon || is_espnow;
+    int csi_len = has_csi ? ESP32C6_WIFI_CSI_LEN : 0;
+    int total_len = ESP32C6_WIFI_RX_CTRL_LEN + csi_len + length;
     uint8_t *header=malloc(total_len);
     memset(header,0,total_len);
 
     /* ESP32-C6 MAC v3 hardware RX-control layout (92 bytes). */
     header[0] = signal_strength + (rand() % 10) - 60;
-    header[1] = 0; /* 1 Mbps DSSS */
+    /* CSI requires an OFDM L-LTF; model CSI-bearing packets as 6 Mbps 11g. */
+    header[1] = has_csi ? 0x0b : 0; /* 6 Mbps OFDM or 1 Mbps DSSS */
     /* Report exactly the active virtual interface, as real MAC filtering does. */
     header[3] = s->mode == Esp32_Mode_Station ? BIT(4) : BIT(5);
     stl_le_p(header + 12, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) / 1000);
     header[20] = (uint8_t)-97;
     header[21] = esp32_wifi_channel;
-    header[39] = 0; /* RX_BB_FORMAT_11B */
+    header[39] = has_csi ? 1 : 0; /* RX_BB_FORMAT_11G or RX_BB_FORMAT_11B */
     stw_le_p(header + 84, length & 0x3fff);
     stw_le_p(header + 86, (length - 4) & 0x3fff);
     if (frame->destination_address[0] & 1) {
         header[11] |= BIT(7); /* is_group */
     }
 
+    /*
+     * esp_csi_gain_ctrl_get_rx_gain() reads the signed FFT gain from byte 22
+     * and the unsigned AGC gain from byte 23 of the reconstructed C6 RX-control
+     * block.  These are reserved in the public esp_wifi_rxctrl_t declaration,
+     * but are populated by real C6 MAC hardware.
+     */
+    header[ESP32C6_WIFI_FFT_GAIN_OFFSET] =
+        (uint8_t)(int8_t)ESP32C6_WIFI_DEFAULT_FFT_GAIN;
+    header[ESP32C6_WIFI_AGC_GAIN_OFFSET] =
+        ESP32C6_WIFI_DEFAULT_AGC_GAIN;
+
     if (csi_len) {
-        uint32_t *csi_info = (uint32_t *)(header + 28);
-
         /*
-         * The ESP32-C3 hardware RX buffer does not append CSI after the
-         * 802.11 frame.  Its private layout is:
+         * ESP32-C6 MAC v2 inserts CSI before the final eight bytes of its
+         * hardware RX-control block:
          *
-         *   RX control[0..43], CSI, RX control[44..47], 802.11 frame
+         *   RX control[0..83], CSI, RX control[84..91], 802.11 frame
          *
-         * Bits 8..17 of the word at RX-control offset 28 contain the CSI
-         * length.  IDF's wdev_csi_len_align() reads that private field and
-         * removes the CSI block while converting the hardware buffer into
-         * the public RX-control-plus-frame representation.
+         * IDF's RX path copies the two RX-control fragments back together and
+         * skips rx_channel_estimate_len bytes between them.  This differs from
+         * C3, whose split is at byte 44.  The C6 CSI length is the 10-bit field
+         * at bytes 33..34; bit 2 of byte 34 marks the estimate as valid.
          */
-        *csi_info = (*csi_info & ~ESP32C6_WIFI_CSI_LEN_MASK) |
-                    ((uint32_t)csi_len << ESP32C6_WIFI_CSI_LEN_SHIFT);
-        memmove(header + ESP32C6_WIFI_RX_CTRL_HW_LEN + csi_len,
-                header + ESP32C6_WIFI_RX_CTRL_HW_LEN,
-                92 -
-                ESP32C6_WIFI_RX_CTRL_HW_LEN);
+        header[ESP32C6_WIFI_CSI_LEN_LOW_OFFSET] = csi_len & 0xff;
+        header[ESP32C6_WIFI_CSI_LEN_HIGH_OFFSET] =
+            ((csi_len >> 8) & 0x03) | ESP32C6_WIFI_CSI_VALID;
 
-        esp32c6_wifi_generate_csi(header + ESP32C6_WIFI_RX_CTRL_HW_LEN,
+        memmove(header + ESP32C6_WIFI_RX_CTRL_CSI_OFFSET + csi_len,
+                header + ESP32C6_WIFI_RX_CTRL_CSI_OFFSET,
+                ESP32C6_WIFI_RX_CTRL_LEN -
+                ESP32C6_WIFI_RX_CTRL_CSI_OFFSET);
+
+        esp32c6_wifi_generate_csi(
+                                  header + ESP32C6_WIFI_RX_CTRL_CSI_OFFSET,
                                   csi_len,
                                   qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL));
     }
 
-    memcpy(header + 92 + csi_len,
+    memcpy(header + ESP32C6_WIFI_RX_CTRL_LEN + csi_len,
            frame, length);
 
     // do a DMA transfer from the hardware to esp32 memory
