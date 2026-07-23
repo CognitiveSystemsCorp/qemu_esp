@@ -31,9 +31,14 @@ REG32(LP_TIMER_COUNTER_LO, 0x0C14)
 REG32(LP_TIMER_COUNTER_HI, 0x0C18)
 
 /* LP AON sub-block: 0x1000 - 0x10FF */
+REG32(LP_AON_STORE0,         0x1000)
 REG32(LP_AON_STORE4,         0x1010)
+REG32(LP_AON_STORE9,         0x1024)
 REG32(LP_AON_CPUCORE0_CFG,   0x1038)
     FIELD(LP_AON_CPUCORE0_CFG, CPU_CORE0_SW_RESET, 28, 1)
+
+#define ESP32C6_LP_AON_STORE_COUNT 10
+#define ESP32C6_LP_AON_STORE4_BOOT_VALUE 0x00280028
 
 /* RTC I2C sub-block: 0x1800 - 0x18FF */
 #define LP_RTC_I2C_BASE  0x1800
@@ -61,13 +66,14 @@ static uint64_t esp32c6_lp_read(void *opaque, hwaddr addr, unsigned int size)
 {
     ESP32C6LpState *s = ESP32C6_LP(opaque);
 
+    if (addr >= A_LP_AON_STORE0 && addr <= A_LP_AON_STORE9 &&
+        (addr - A_LP_AON_STORE0) % 4 == 0) {
+        return s->lp_aon_store[(addr - A_LP_AON_STORE0) / 4];
+    }
+
     switch (addr) {
     case A_LP_CLKRST_RESET_CAUSE:
         return s->reset_reason;
-
-    case A_LP_AON_STORE4:
-        /* Magic value expected by IDF early-boot code */
-        return 0x00280028;
 
     case A_LP_TIMER_COUNTER_LO:
         return (uint32_t)(s->lp_timer_counter & 0xFFFFFFFF);
@@ -89,6 +95,12 @@ static void esp32c6_lp_write(void *opaque, hwaddr addr, uint64_t value,
                               unsigned int size)
 {
     ESP32C6LpState *s = ESP32C6_LP(opaque);
+
+    if (addr >= A_LP_AON_STORE0 && addr <= A_LP_AON_STORE9 &&
+        (addr - A_LP_AON_STORE0) % 4 == 0) {
+        s->lp_aon_store[(addr - A_LP_AON_STORE0) / 4] = value;
+        return;
+    }
 
     switch (addr) {
     case A_LP_TIMER_UPDATE:
@@ -141,6 +153,7 @@ static void esp32c6_lp_init(Object *obj)
     qdev_init_gpio_out_named(DEVICE(s), &s->cpu_reset, ESP32C6_LP_RESET_GPIO, 1);
 
     s->reset_reason = ESP32C6_CHIP_POWER_ON;
+    s->lp_aon_store[4] = ESP32C6_LP_AON_STORE4_BOOT_VALUE;
 }
 
 static void esp32c6_lp_class_init(ObjectClass *klass, void *data)

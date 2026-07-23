@@ -43,6 +43,7 @@ typedef struct {
     SysBusDevice parent;
     MemoryRegion iomem;
     uint64_t lp_timer_counter;
+    uint32_t lp_aon_store[10];
     ESP32C6ResetReason reset_reason;
     qemu_irq cpu_reset;
 } ESP32C6LpState;
