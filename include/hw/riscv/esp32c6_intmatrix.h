@@ -50,6 +50,8 @@ typedef struct ESP32C6IntMatrixState {
     /* >64 sources, so use a two-element array */
     uint64_t irq_levels[2];
 
+    uint8_t line_active_inputs[ESP32C6_CPU_INT_COUNT + 1];
+
     EspRISCVCPU *cpu;
     qemu_irq out_irqs[ESP32C6_CPU_INT_COUNT + 1];
 } ESP32C6IntMatrixState;

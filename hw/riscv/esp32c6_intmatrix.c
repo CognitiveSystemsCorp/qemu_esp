@@ -43,12 +43,7 @@
 
 static int get_output_line_level(ESP32C6IntMatrixState *s, int line)
 {
-    for (int i = 0; i < ESP32C6_INT_MATRIX_INPUTS; i++) {
-        if (s->irq_map[i] == line && LEVELS_SET(s->irq_levels, i)) {
-            return 1;
-        }
-    }
-    return 0;
+    return s->line_active_inputs[line] > 0 ? 1 : 0;
 }
 
 static bool line_should_assert(ESP32C6IntMatrixState *s, int line)
@@ -66,8 +61,8 @@ static bool line_should_assert(ESP32C6IntMatrixState *s, int line)
      */
     return BIT_SET(s->irq_enabled, line) &&
            BIT_SET(s->cpu->mie_enabled, line) &&
-           get_output_line_level(s, line) != 0 &&
-           (s->irq_prio[line] >= s->irq_thres);
+           (s->irq_prio[line] >= s->irq_thres) &&
+           get_output_line_level(s, line) != 0;
 }
 
 static void update_line(ESP32C6IntMatrixState *s, int line)
@@ -101,16 +96,15 @@ static void irq_handler(void *opaque, int n, int level)
 
     level = level ? 1 : 0;
     const int former_level = LEVELS_SET(s->irq_levels, n) ? 1 : 0;
+    const int line = s->irq_map[n];
 
-    if (level) {
+    if (level && !former_level) {
         LEVELS_RAISE(s->irq_levels, n);
-    } else {
+        s->line_active_inputs[line]++;
+        update_line(s, line);
+    } else if (!level && former_level) {
         LEVELS_LOWER(s->irq_levels, n);
-    }
-
-    /* Nothing to do if the level is unchanged. */
-    if (former_level != level) {
-        const int line = s->irq_map[n];
+        s->line_active_inputs[line]--;
         update_line(s, line);
     }
 }
@@ -155,8 +149,12 @@ static void map_write(void *opaque, hwaddr addr, uint64_t value,
     if (idx < ESP32C6_INT_MATRIX_INPUTS) {
         const uint8_t old_line = s->irq_map[idx];
         const uint8_t new_line = value & 0x1f;
-        s->irq_map[idx] = new_line;
         if (old_line != new_line) {
+            s->irq_map[idx] = new_line;
+            if (LEVELS_SET(s->irq_levels, idx)) {
+                s->line_active_inputs[old_line]--;
+                s->line_active_inputs[new_line]++;
+            }
             update_line(s, old_line);
             update_line(s, new_line);
         }
@@ -298,6 +296,7 @@ static void esp32c6_intmatrix_reset_hold(Object *obj, ResetType type)
 
     memset(s->irq_map, 0, sizeof(s->irq_map));
     memset(s->irq_prio, 0, sizeof(s->irq_prio));
+    memset(s->line_active_inputs, 0, sizeof(s->line_active_inputs));
     s->irq_thres = 0;
     s->irq_levels[0] = 0;
     s->irq_levels[1] = 0;
