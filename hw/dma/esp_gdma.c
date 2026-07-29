@@ -1029,6 +1029,7 @@ static const TypeInfo esp_gdma_info = {
         .instance_size = sizeof(ESPGdmaState),
         .instance_init = esp_gdma_init,
         .class_init = esp_gdma_class_init,
+        .class_size = sizeof(ESPGdmaClass),
         .abstract = true,
 };
 
