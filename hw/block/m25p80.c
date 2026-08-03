@@ -834,6 +834,7 @@ static void complete_collecting_data(Flash *s)
         break;
     case WRSR2:
         switch (get_man(s)) {
+        case MAN_GIGADEVICE:
         case MAN_WINBOND:
             s->quad_enable = !!(s->data[0] & 0x02);
             break;
@@ -1320,6 +1321,7 @@ static void decode_new_cmd(Flash *s, uint32_t value)
         }
 
         switch (get_man(s)) {
+        case MAN_GIGADEVICE:
         case MAN_WINBOND:
             s->needed_bytes = 1;
             s->state = STATE_COLLECTING_DATA;
@@ -1499,6 +1501,7 @@ static void decode_new_cmd(Flash *s, uint32_t value)
         case MAN_MACRONIX:
             s->quad_enable = true;
             break;
+        case MAN_GIGADEVICE:
         case MAN_WINBOND:
             s->data[0] = (!!s->quad_enable) << 1;
             s->pos = 0;

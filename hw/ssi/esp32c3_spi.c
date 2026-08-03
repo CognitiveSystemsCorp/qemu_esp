@@ -39,6 +39,7 @@ enum {
     CMD_WREN = 0x6,
     CMD_READ = 0x03,
     CMD_DIOR = 0xbb,
+    CMD_QIOR = 0xeb,
     CMD_HPM = 0xa3,
 };
 
@@ -159,14 +160,18 @@ static void esp32c3_spi_perform_transaction(ESP32C3SpiState *s, ESP32C3SpiTransa
     esp32c3_spi_txrx_buffer(s, &t->cmd, t->cmd_bytes, NULL, 0);
     esp32c3_spi_txrx_buffer(s, &t->addr, t->addr_bytes, NULL, 0);
 
-    /* Dual I/O Read always has an eight-bit mode phase after the address.
-     * ESP-IDF can program SPI_MEM_USR_DUMMY_CYCLELEN to zero because the
-     * hardware generates this phase as part of the dual-I/O address sequence.
-     * The byte-oriented SSI flash model, however, expects the mode phase as an
-     * explicit transfer.  Without it, the first returned byte is consumed as
-     * the mode byte and every flash read is shifted by one byte. */
+    /* Dual and quad I/O reads have a mode phase after the address.  The SPI
+     * controller accounts for phases in bus cycles, whereas the byte-oriented
+     * m25p80 model accounts for each phase cycle as one SSI transfer.  Supply
+     * the minimum number of transfers expected by that model.  Otherwise it
+     * consumes the first returned bytes as mode/dummy cycles and ESP-IDF's
+     * flash verification fails. */
     if (t->cmd == CMD_DIOR && t->dummy_bytes == 0) {
         t->dummy_bytes = 1;
+    } else if (t->cmd == CMD_QIOR && t->dummy_bytes < 5) {
+        /* GigaDevice/Winbond: one continuous-read mode cycle plus four dummy
+         * cycles; see decode_qio_read_cmd() in the m25p80 model. */
+        t->dummy_bytes = 5;
     }
     esp32c3_spi_dummy_cycles(s, t->dummy_bytes);
     esp32c3_spi_txrx_buffer(s, t->data, t->tx_bytes, t->data, t->rx_bytes);
