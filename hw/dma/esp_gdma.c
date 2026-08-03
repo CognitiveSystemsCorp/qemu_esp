@@ -148,7 +148,10 @@ static void esp_gdma_reset_fifo(DmaConfigState* s)
  */
 static bool esp_gdma_read_descr(ESPGdmaState *s, uint32_t addr, GdmaLinkedList* out)
 {
-    MemTxResult res = dma_memory_read(&s->dma_as, addr, out, sizeof(GdmaLinkedList), MEMTXATTRS_UNSPECIFIED);
+    ESPGdmaClass *class = ESP_GDMA_GET_CLASS(s);
+    AddressSpace *as = class->use_system_memory ? &address_space_memory :
+                                                   &s->dma_as;
+    MemTxResult res = dma_memory_read(as, addr, out, sizeof(GdmaLinkedList), MEMTXATTRS_UNSPECIFIED);
     return res == MEMTX_OK;
 }
 
@@ -162,7 +165,10 @@ static bool esp_gdma_read_descr(ESPGdmaState *s, uint32_t addr, GdmaLinkedList* 
  */
 static bool esp_gdma_write_descr(ESPGdmaState *s, uint32_t addr, GdmaLinkedList* in)
 {
-    MemTxResult res = dma_memory_write(&s->dma_as, addr, in, sizeof(GdmaLinkedList), MEMTXATTRS_UNSPECIFIED);
+    ESPGdmaClass *class = ESP_GDMA_GET_CLASS(s);
+    AddressSpace *as = class->use_system_memory ? &address_space_memory :
+                                                   &s->dma_as;
+    MemTxResult res = dma_memory_write(as, addr, in, sizeof(GdmaLinkedList), MEMTXATTRS_UNSPECIFIED);
     return res == MEMTX_OK;
 }
 
@@ -178,13 +184,19 @@ static bool esp_gdma_write_descr(ESPGdmaState *s, uint32_t addr, GdmaLinkedList*
  */
 static bool esp_gdma_read_guest(ESPGdmaState *s, uint32_t addr, void* data, uint32_t len)
 {
-    MemTxResult res = dma_memory_read(&s->dma_as, addr, data, len, MEMTXATTRS_UNSPECIFIED);
+    ESPGdmaClass *class = ESP_GDMA_GET_CLASS(s);
+    AddressSpace *as = class->use_system_memory ? &address_space_memory :
+                                                   &s->dma_as;
+    MemTxResult res = dma_memory_read(as, addr, data, len, MEMTXATTRS_UNSPECIFIED);
     return res == MEMTX_OK;
 }
 
 static bool esp_gdma_write_guest(ESPGdmaState *s, uint32_t addr, void* data, uint32_t len)
 {
-    MemTxResult res = dma_memory_write(&s->dma_as, addr, data, len, MEMTXATTRS_UNSPECIFIED);
+    ESPGdmaClass *class = ESP_GDMA_GET_CLASS(s);
+    AddressSpace *as = class->use_system_memory ? &address_space_memory :
+                                                   &s->dma_as;
+    MemTxResult res = dma_memory_write(as, addr, data, len, MEMTXATTRS_UNSPECIFIED);
     return res == MEMTX_OK;
 }
 
@@ -315,7 +327,8 @@ bool esp_gdma_read_channel(ESPGdmaState *s, uint32_t chan, uint8_t* buffer, uint
                                              R_GDMA_INTERRUPT_OUT_EOF_MASK);
 
     /* Get the guest DRAM address */
-    uint32_t out_addr = (class->ram_addr & 0xfff00000) |
+    uint32_t out_addr = state->link_addr ? state->link_addr :
+                        (class->ram_addr & 0xfff00000) |
                         FIELD_EX32(state->link, GDMA_OUT_LINK, ADDR);
 
     /* Boolean to mark whether we need to check the owner for in and out buffers */
@@ -338,6 +351,9 @@ bool esp_gdma_read_channel(ESPGdmaState *s, uint32_t chan, uint8_t* buffer, uint
      * On the real hardware, both in and out are checked at the same time, so in case of an error, both bits
      * are set. Replicate the same behavior here. */
     if ( !valid || (owner_check_out && !out_list.config.owner) ) {
+        warn_report("[GDMA] Invalid OUT descriptor: channel=%u address=0x%08x valid=%d owner=%u check_owner=%d",
+                    chan, out_addr, valid, valid ? out_list.config.owner : 0,
+                    owner_check_out);
         esp_gdma_set_status(&state->int_state, R_GDMA_INTERRUPT_OUT_DSCR_ERR_MASK);
         return false;
     }
@@ -354,6 +370,8 @@ bool esp_gdma_read_channel(ESPGdmaState *s, uint32_t chan, uint8_t* buffer, uint
 
         valid = esp_gdma_read_guest(s, out_list.buf_addr, buffer + consumed, min);
         if (!valid) {
+            warn_report("[GDMA] Failed to read OUT buffer: channel=%u address=0x%08x size=%u",
+                        chan, out_list.buf_addr, min);
             esp_gdma_set_status(&state->int_state, R_GDMA_INTERRUPT_OUT_DSCR_ERR_MASK);
             error = true;
             break;
@@ -384,6 +402,10 @@ bool esp_gdma_read_channel(ESPGdmaState *s, uint32_t chan, uint8_t* buffer, uint
 
             /* Only check the valid flag and the owner if we don't have to exit the loop*/
             if ( !exit_loop && (!valid || (owner_check_out && !out_list.config.owner)) ) {
+                warn_report("[GDMA] Invalid next OUT descriptor: channel=%u address=0x%08x valid=%d owner=%u check_owner=%d",
+                            chan, out_addr, valid,
+                            valid ? out_list.config.owner : 0,
+                            owner_check_out);
                 esp_gdma_set_status(&state->int_state, R_GDMA_INTERRUPT_OUT_DSCR_ERR_MASK);
                 error = true;
             }
@@ -430,7 +452,8 @@ bool esp_gdma_write_channel(ESPGdmaState *s, uint32_t chan, uint8_t* buffer, uin
                                              R_GDMA_INTERRUPT_IN_SUC_EOF_MASK);
 
     /* Get highest 12 bits of the DRAM address */
-    uint32_t in_addr = (class->ram_addr & 0xfff00000) |
+    uint32_t in_addr = state->link_addr ? state->link_addr :
+                       (class->ram_addr & 0xfff00000) |
                        FIELD_EX32(state->link, GDMA_IN_LINK, ADDR);
 
     /* Boolean to mark whether we need to check the owner for in buffers */

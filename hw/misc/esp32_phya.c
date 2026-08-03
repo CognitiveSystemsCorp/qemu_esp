@@ -32,6 +32,16 @@ static uint64_t esp32_phya_read(void *opaque, hwaddr addr, unsigned int size)
         r |= 7 << 14;
     }
 
+    /* Power-detector tone-start status: bits [16:14] == 7 (done). */
+    if (addr == 0x80c) {
+        r |= 7 << 14;
+    }
+
+    /* IQ estimation done: bit 16 of the IQ-est status register. */
+    if (addr == 0x47c) {
+        r |= BIT(16);
+    }
+
     /* Channel-frequency synthesizer switch completion. */
     if (addr == 0xcc) {
         r |= BIT(8);

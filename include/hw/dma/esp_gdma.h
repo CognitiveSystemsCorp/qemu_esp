@@ -98,6 +98,8 @@ typedef struct {
     uint32_t status;
     uint32_t push_pop;
     uint32_t link;
+    /* Full descriptor address for targets which split it from LINK commands. */
+    uint32_t link_addr;
     /* Status registers */
     uint32_t state;
     uint32_t suc_eof_desc_addr; // Address of descriptor when EOF bit is 1
@@ -130,6 +132,8 @@ typedef struct ESPGdmaClass {
     /* All the attributes and method that are common to all instances must be stored here */
     size_t m_channel_count;
     uint32_t ram_addr;
+    /* Use the SoC system address space when DMA-capable external RAM exists. */
+    bool use_system_memory;
 
     /* Virtual methods */
     /**

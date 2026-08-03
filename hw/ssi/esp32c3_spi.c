@@ -38,6 +38,7 @@ enum {
     CMD_WRDI = 0x4,
     CMD_WREN = 0x6,
     CMD_READ = 0x03,
+    CMD_DIOR = 0xbb,
     CMD_HPM = 0xa3,
 };
 
@@ -127,11 +128,11 @@ static void esp32c3_spi_txrx_buffer(ESP32C3SpiState *s,
     int bytes = MAX(tx_bytes, rx_bytes);
     for (int i = 0; i < bytes; ++i) {
         uint8_t byte = 0;
-        if (byte < tx_bytes) {
+        if (i < tx_bytes) {
             memcpy(&byte, tx + i, 1);
         }
         uint32_t res = ssi_transfer(s->spi, byte);
-        if (byte < rx_bytes) {
+        if (i < rx_bytes) {
             memcpy(rx + i, &res, 1);
         }
     }
@@ -157,6 +158,16 @@ static void esp32c3_spi_perform_transaction(ESP32C3SpiState *s, ESP32C3SpiTransa
     qemu_set_irq(s->cs_gpio[0], 0);
     esp32c3_spi_txrx_buffer(s, &t->cmd, t->cmd_bytes, NULL, 0);
     esp32c3_spi_txrx_buffer(s, &t->addr, t->addr_bytes, NULL, 0);
+
+    /* Dual I/O Read always has an eight-bit mode phase after the address.
+     * ESP-IDF can program SPI_MEM_USR_DUMMY_CYCLELEN to zero because the
+     * hardware generates this phase as part of the dual-I/O address sequence.
+     * The byte-oriented SSI flash model, however, expects the mode phase as an
+     * explicit transfer.  Without it, the first returned byte is consumed as
+     * the mode byte and every flash read is shifted by one byte. */
+    if (t->cmd == CMD_DIOR && t->dummy_bytes == 0) {
+        t->dummy_bytes = 1;
+    }
     esp32c3_spi_dummy_cycles(s, t->dummy_bytes);
     esp32c3_spi_txrx_buffer(s, t->data, t->tx_bytes, t->data, t->rx_bytes);
     qemu_set_irq(s->cs_gpio[0], 1);

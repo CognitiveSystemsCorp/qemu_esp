@@ -31,6 +31,10 @@ static uint64_t esp32_gpio_read(void *opaque, hwaddr addr, unsigned int size)
         break;
 
     default:
+        /* The ESP32-C5 places GPIO_STRAP at offset 0x0 instead of 0x38. */
+        if (addr == s->strap_offset) {
+            r = s->strap_mode;
+        }
         break;
     }
     return r;
@@ -62,6 +66,8 @@ static void esp32_gpio_init(Object *obj)
 
     /* Set the default value for the strap_mode property */
     object_property_set_int(obj, "strap_mode", ESP32_STRAP_MODE_FLASH_BOOT, &error_fatal);
+    /* Default GPIO_STRAP register offset (ESP32 / ESP32-C3). */
+    s->strap_offset = A_GPIO_STRAP;
 
     memory_region_init_io(&s->iomem, obj, &uart_ops, s,
                           TYPE_ESP32_GPIO, 0x1000);

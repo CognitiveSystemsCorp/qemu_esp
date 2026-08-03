@@ -16,6 +16,14 @@
 #define ESP32C3_GDMA_WARNING    0
 #define ESP32C3_GDMA_DEBUG      0
 
+/* ESP32-C5 dedicated descriptor link-address registers. */
+#define ESP32C5_IN_LINK_ADDR_START   0x3ac
+#define ESP32C5_OUT_LINK_ADDR_START  0x3b8
+#define ESP32C5_LINK_ADDR_END        0x3c0
+
+#define ESP32C5_LINK_START           BIT(1)
+#define ESP32C5_LINK_RESTART         BIT(2)
+
 
 typedef struct {
     uint32_t specific;
@@ -163,7 +171,38 @@ static uint32_t esp32c3_read_chan_register(ESP32C3GdmaState *s, hwaddr addr)
     const uint32_t dir = (chan_with_dir & 1) ? ESP_GDMA_OUT_IDX : ESP_GDMA_IN_IDX;
     const uint32_t reg = addr % DMA_DIR_REGS_SIZE;
 
-    return esp_gdma_read_chan_register(&s->parent, dir, chan, esp32c3_generic_reg(reg));
+    uint32_t value = esp_gdma_read_chan_register(&s->parent, dir, chan,
+                                                  esp32c3_generic_reg(reg));
+
+    if (ESP32C3_GDMA_GET_CLASS(s)->split_link_address && reg == A_DMA_LINK) {
+        uint32_t command = 0;
+
+        command |= FIELD_EX32(value, GDMA_OUT_LINK, START) ?
+                   ESP32C5_LINK_START : 0;
+        command |= FIELD_EX32(value, GDMA_OUT_LINK, RESTART) ?
+                   ESP32C5_LINK_RESTART : 0;
+        return command;
+    }
+
+    return value;
+}
+
+static bool esp32c5_link_addr_decode(hwaddr addr, uint32_t *dir,
+                                     uint32_t *chan)
+{
+    if (addr >= ESP32C5_IN_LINK_ADDR_START &&
+        addr < ESP32C5_OUT_LINK_ADDR_START && !(addr & 3)) {
+        *dir = ESP_GDMA_IN_IDX;
+        *chan = (addr - ESP32C5_IN_LINK_ADDR_START) / 4;
+        return *chan < ESP32C3_GDMA_CHANNEL_COUNT;
+    }
+    if (addr >= ESP32C5_OUT_LINK_ADDR_START &&
+        addr <= ESP32C5_LINK_ADDR_END && !(addr & 3)) {
+        *dir = ESP_GDMA_OUT_IDX;
+        *chan = (addr - ESP32C5_OUT_LINK_ADDR_START) / 4;
+        return *chan < ESP32C3_GDMA_CHANNEL_COUNT;
+    }
+    return false;
 }
 
 
@@ -172,6 +211,14 @@ static uint64_t esp32c3_gdma_read(void *opaque, hwaddr addr, unsigned int size)
     ESP32C3GdmaState *s = ESP32C3_GDMA(opaque);
     ESPGdmaState *parent = &s->parent;
     uint64_t r = 0;
+
+    if (ESP32C3_GDMA_GET_CLASS(s)->split_link_address) {
+        uint32_t dir, chan;
+
+        if (esp32c5_link_addr_decode(addr, &dir, &chan)) {
+            return parent->ch_conf[dir][chan].link_addr;
+        }
+    }
 
 
     /* The registers on the ESP32-C3 start with the interrupt registers, then come the misc registers, and
@@ -225,7 +272,22 @@ static void esp32c3_write_chan_register(ESP32C3GdmaState *s, hwaddr addr, uint32
     const uint32_t dir = (chan_with_dir & 1) ? ESP_GDMA_OUT_IDX : ESP_GDMA_IN_IDX;
     const uint32_t reg = addr % DMA_DIR_REGS_SIZE;
 
-    esp_gdma_write_chan_register(&s->parent, dir, chan, esp32c3_generic_reg(reg), value);
+    if (ESP32C3_GDMA_GET_CLASS(s)->split_link_address && reg == A_DMA_LINK) {
+        uint32_t link = esp_gdma_read_chan_register(&s->parent, dir, chan,
+                                                    GDMA_LINK_REG);
+
+        link &= R_GDMA_OUT_LINK_ADDR_MASK;
+        link |= (value & ESP32C5_LINK_START) ?
+                R_GDMA_OUT_LINK_START_MASK : 0;
+        link |= (value & ESP32C5_LINK_RESTART) ?
+                R_GDMA_OUT_LINK_RESTART_MASK : 0;
+        esp_gdma_write_chan_register(&s->parent, dir, chan, GDMA_LINK_REG,
+                                     link);
+        return;
+    }
+
+    esp_gdma_write_chan_register(&s->parent, dir, chan,
+                                 esp32c3_generic_reg(reg), value);
 }
 
 
@@ -234,6 +296,15 @@ static void esp32c3_gdma_write(void *opaque, hwaddr addr,
 {
     ESP32C3GdmaState *s = ESP32C3_GDMA(opaque);
     ESPGdmaState *parent = &s->parent;
+
+    if (ESP32C3_GDMA_GET_CLASS(s)->split_link_address) {
+        uint32_t dir, chan;
+
+        if (esp32c5_link_addr_decode(addr, &dir, &chan)) {
+            parent->ch_conf[dir][chan].link_addr = (uint32_t)value;
+            return;
+        }
+    }
 
 #if ESP32C3_GDMA_DEBUG
     info_report("[C3][GDMA] Writing to %08lx (%08lx)", addr, value);
@@ -294,8 +365,10 @@ static bool esp32c3_is_periph_invalid(ESPGdmaState *s, GdmaPeripheral per)
 static void esp32c3_gdma_class_init(ObjectClass *klass, void *data)
 {
     ESPGdmaClass* class = ESP_GDMA_CLASS(klass);
+    ESP32C3GdmaClass *c3_class = ESP32C3_GDMA_CLASS(klass);
     class->is_periph_invalid = esp32c3_is_periph_invalid;
     class->m_channel_count = ESP32C3_GDMA_CHANNEL_COUNT;
+    c3_class->split_link_address = false;
 }
 
 

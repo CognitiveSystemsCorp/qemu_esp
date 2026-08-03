@@ -28,7 +28,9 @@
 /**
  * @brief Size of the I/O memory region for the GDMA component
  */
-#define ESP32C3_GDMA_REGS_SIZE         (A_DMA_OUT_PERI_SEL_CH2 + 4)
+/* C5 derivatives add link-address registers through offset 0x3c0. They are
+ * inert for C3 and C6 because split_link_address remains disabled. */
+#define ESP32C3_GDMA_REGS_SIZE         0x3c4
 
 
 typedef struct ESP32C3GdmaState {
@@ -40,6 +42,7 @@ typedef struct ESP32C3GdmaState {
 
 typedef struct ESP32C3GdmaClass {
     ESPGdmaClass parent_class;
+    bool split_link_address;
 } ESP32C3GdmaClass;
 
 

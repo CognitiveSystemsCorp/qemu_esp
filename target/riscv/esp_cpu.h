@@ -80,6 +80,25 @@ typedef struct EspRISCVCPU {
      * can refresh the per-line IRQ assertion state. */
     void (*mie_changed_cb)(void *opaque);
     void *mie_changed_opaque;
+    /* Espressif PMA (Physical Memory Attribute) extension CSRs.
+     * pmacfg0-15 at 0xBC0-0xBCF, pmaaddr0-15 at 0xBD0-0xBDF.
+     * The ROM bootloader writes these and reads them back to verify the
+     * extension works; if the read-back does not match, it triggers a
+     * software reset.  We model them as plain read/write storage (the
+     * actual memory-attribute enforcement is not needed for emulation). */
+    uint32_t pma_cfg[16];
+    uint32_t pma_addr[16];
+    /* MHCR (Machine Hardware Control Register, CSR 0x7C1): branch-predictor
+     * control (RS/BFE/BTB bits).  The ROM bootloader sets these bits during
+     * early boot; we model it as plain storage since TCG does not emulate
+     * branch prediction. */
+    uint32_t mhcr;
+    /* CLIC CSRs used by IDF startup code: MTVT (0x307), MINTSTATUS (0xFB1),
+     * MINTTHRESH (0x347).  QEMU does not model the CLIC, so these are plain
+     * read/write storage. */
+    uint32_t clic_mtvt;
+    uint32_t clic_mintstatus;
+    uint32_t clic_mintthresh;
 } EspRISCVCPU;
 
 /**

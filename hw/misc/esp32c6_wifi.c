@@ -240,7 +240,7 @@ static void esp32c6_wifi_tx(Esp32WifiState *s, uint32_t kick, unsigned qid)
     Esp32_WLAN_handle_frame(s, &frame);
 }
 
-void Esp32_WLAN_frame_delivered(Esp32WifiState *s){
+__attribute__((weak)) void Esp32_WLAN_frame_delivered(Esp32WifiState *s){
     s->raw_interrupt |= 0x80;
     qemu_set_irq(s->irq, 1);
 }
@@ -316,7 +316,9 @@ static void esp32C3_wifi_write(void *opaque, hwaddr addr, uint64_t value,
 }
 
 // frame from ap to esp32
-void Esp32_sendFrame(Esp32WifiState *s, mac80211_frame *frame,int length, int signal_strength) {
+static void esp32c6_wifi_send_frame(Esp32WifiState *s,
+                                    mac80211_frame *frame, int length,
+                                    int signal_strength) {
     if (DEBUG) {
         printf("esp32c6 RX frame len=%d inlink=0x%08x\n",
                length, s->dma_inlink_address);
@@ -463,6 +465,7 @@ static void esp32C3_wifi_realize(DeviceState *dev, Error **errp)
     sysbus_init_mmio(sbd, &s->iomem);
     sysbus_init_irq(sbd, &s->irq);
     memset(s->mem,0,sizeof(s->mem));
+    s->send_frame = esp32c6_wifi_send_frame;
     Esp32_WLAN_setup_ap(dev, s);
 }
 static Property esp32C3_wifi_properties[] = {
@@ -497,4 +500,4 @@ static void esp32C3_wifi_register_types(void)
 }
 
 type_init(esp32C3_wifi_register_types)
-int esp32_wifi_channel = 5;
+__attribute__((weak)) int esp32_wifi_channel = 5;

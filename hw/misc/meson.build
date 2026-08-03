@@ -176,6 +176,24 @@ system_ss.add(when: 'CONFIG_RISCV_ESP32C6', if_true: files(
   'esp32c3_sha.c',
   'esp32c6_sha.c',
 ))
+system_ss.add(when: 'CONFIG_RISCV_ESP32C5', if_true: files(
+  'esp32c5_cache.c',
+  'esp32c5_i2c_ana_mst.c',
+  'esp32c5_intpri.c',
+  'esp32c5_jtag.c',
+  'esp32c5_lp.c',
+  'esp32c5_modem.c',
+  'esp32c5_ecc.c',
+  'esp32_wlan_packet.c',
+  'esp32_wifi_ap.c',
+  'esp32_phya.c',
+  'esp32c5_wifi.c',
+  'esp32c5_pcr.c',
+  'esp32c5_spi_mem.c',
+  'esp_sha.c',
+  'esp32c3_sha.c',
+  'esp32c5_sha.c',
+))
 
 system_ss.add(when: 'CONFIG_XTENSA_ESP32S3', if_true: files(
   'esp32s3_cache.c',

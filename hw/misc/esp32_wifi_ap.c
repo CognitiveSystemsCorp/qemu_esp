@@ -103,7 +103,9 @@ static void Esp32_WLAN_inject_timer(void *opaque)
         // remove from queue
         s->inject_queue_size--;
         s->inject_queue = frame->next_frame;
-        Esp32_sendFrame(s, (void *)frame, frame->frame_length,frame->signal_strength);
+        g_assert(s->send_frame);
+        s->send_frame(s, frame, frame->frame_length,
+                      frame->signal_strength);
         g_free(frame);
     }
     if (s->inject_queue_size > 0) {

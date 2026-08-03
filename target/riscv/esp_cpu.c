@@ -47,6 +47,23 @@
 #define ESP_CPU_CSR_GPIO_IN     0x804
 #define ESP_CPU_CSR_GPIO_OUT    0x805
 
+/* Espressif PMA (Physical Memory Attribute) extension CSRs.
+ * pmacfg0-15 at 0xBC0-0xBCF, pmaaddr0-15 at 0xBD0-0xBDF. */
+#define ESP_CPU_CSR_PMACFG0     0xBC0
+#define ESP_CPU_CSR_PMAADDR0    0xBD0
+#define ESP_CPU_CSR_PMA_COUNT   16
+
+/* MHCR (Machine Hardware Control Register): branch-predictor control. */
+#define ESP_CPU_CSR_MHCR        0x7C1
+
+/* CLIC CSRs (used by IDF startup code on ESP32-C5 and later). */
+#define ESP_CPU_CSR_MTVT        0x307
+#define ESP_CPU_CSR_MINTSTATUS  0xFB1
+#define ESP_CPU_CSR_MINTTHRESH  0x347
+
+/* CLIC IDs 0..15 are reserved for internal/system interrupts. */
+#define ESP_CPU_CLIC_EXT_INTR_OFFSET 16
+
 
 static RISCVException esp_cpu_csr_predicate(CPURISCVState *env, int csrno) {
     return RISCV_EXCP_NONE;
@@ -101,6 +118,20 @@ static RISCVException esp_cpu_csr_read(CPURISCVState *env, int csrno, target_ulo
         *ret_value = esp_cpu_get_cycles(&s->cc_machine);
     } else if (csrno >= ESP_CPU_CSR_TSELECT && csrno <= ESP_CPU_CSR_TCONTROL) {
         /* Nothing special to do here */
+    } else if (csrno == ESP_CPU_CSR_MHCR) {
+        *ret_value = s->mhcr;
+    } else if (csrno == ESP_CPU_CSR_MTVT) {
+        *ret_value = s->clic_mtvt;
+    } else if (csrno == ESP_CPU_CSR_MINTSTATUS) {
+        *ret_value = s->clic_mintstatus;
+    } else if (csrno == ESP_CPU_CSR_MINTTHRESH) {
+        *ret_value = s->clic_mintthresh;
+    } else if (csrno >= ESP_CPU_CSR_PMACFG0 &&
+               csrno < ESP_CPU_CSR_PMACFG0 + ESP_CPU_CSR_PMA_COUNT) {
+        *ret_value = s->pma_cfg[csrno - ESP_CPU_CSR_PMACFG0];
+    } else if (csrno >= ESP_CPU_CSR_PMAADDR0 &&
+               csrno < ESP_CPU_CSR_PMAADDR0 + ESP_CPU_CSR_PMA_COUNT) {
+        *ret_value = s->pma_addr[csrno - ESP_CPU_CSR_PMAADDR0];
     } else {
         *ret_value = 0;
     }
@@ -117,6 +148,20 @@ static RISCVException esp_cpu_csr_write(CPURISCVState *env, int csrno, target_ul
         s->cc_machine.cycles = new_value;
     } else if (csrno >= ESP_CPU_CSR_TSELECT && csrno <= ESP_CPU_CSR_TCONTROL) {
         /* Nothing special to do here */
+    } else if (csrno == ESP_CPU_CSR_MHCR) {
+        s->mhcr = (uint32_t)new_value;
+    } else if (csrno == ESP_CPU_CSR_MTVT) {
+        s->clic_mtvt = (uint32_t)new_value;
+    } else if (csrno == ESP_CPU_CSR_MINTSTATUS) {
+        s->clic_mintstatus = (uint32_t)new_value;
+    } else if (csrno == ESP_CPU_CSR_MINTTHRESH) {
+        s->clic_mintthresh = (uint32_t)new_value;
+    } else if (csrno >= ESP_CPU_CSR_PMACFG0 &&
+               csrno < ESP_CPU_CSR_PMACFG0 + ESP_CPU_CSR_PMA_COUNT) {
+        s->pma_cfg[csrno - ESP_CPU_CSR_PMACFG0] = (uint32_t)new_value;
+    } else if (csrno >= ESP_CPU_CSR_PMAADDR0 &&
+               csrno < ESP_CPU_CSR_PMAADDR0 + ESP_CPU_CSR_PMA_COUNT) {
+        s->pma_addr[csrno - ESP_CPU_CSR_PMAADDR0] = (uint32_t)new_value;
     }
 
     return RISCV_EXCP_NONE;
@@ -188,6 +233,35 @@ static riscv_csr_operations esp_cpu_mie_csr_ops = {
     .predicate = esp_cpu_csr_predicate,
     .read = esp_cpu_mie_csr_read,
     .write = esp_cpu_mie_csr_write,
+};
+
+/*
+ * mtvec CSR override for CLIC-capable SoCs (ESP32-C5 and successors).
+ *
+ * The stock RISC-V write_mtvec() in target/riscv/csr.c rejects modes >= 2
+ * ("reserved mode not supported") and silently drops the write.  The ESP32-C5
+ * repurposes mtvec mode 3 for CLIC hardware-vectored interrupts, so the guest
+ * writes mtvec = base | 3 and expects it to stick.  Accept all modes verbatim;
+ * the CLIC dispatch is handled in esp_cpu_exec_interrupt().
+ */
+static RISCVException esp_cpu_mtvec_csr_read(CPURISCVState *env, int csrno,
+                                             target_ulong *ret_value)
+{
+    *ret_value = env->mtvec;
+    return RISCV_EXCP_NONE;
+}
+
+static RISCVException esp_cpu_mtvec_csr_write(CPURISCVState *env, int csrno,
+                                              target_ulong new_value)
+{
+    env->mtvec = new_value;
+    return RISCV_EXCP_NONE;
+}
+
+static riscv_csr_operations esp_cpu_mtvec_csr_ops = {
+    .predicate = esp_cpu_csr_predicate,
+    .read = esp_cpu_mtvec_csr_read,
+    .write = esp_cpu_mtvec_csr_write,
 };
 
 void esp_cpu_set_mie_changed_cb(EspRISCVCPU *cpu,
@@ -279,6 +353,17 @@ static bool esp_cpu_exec_interrupt(CPUState *cs, int interrupt_request)
     }
 
     /*
+     * ESP-IDF critical sections mask CLIC interrupts through mintthresh
+     * rather than clearing mstatus.MIE.  Until per-interrupt CLIC priorities
+     * are modeled, any non-zero threshold must defer peripheral delivery;
+     * otherwise FreeRTOS can context-switch while holding a spinlock.
+     */
+    if ((cpu->parent_obj.env.mtvec & 3) == 3 &&
+        cpu->clic_mintthresh >= 0x7f) {
+        return false;
+    }
+
+    /*
      * Bridge our intmatrix-gated model to the parent RISC-V dispatcher's
      * `mie & mip` check on IRQ_M_EXT.
      *
@@ -309,13 +394,61 @@ static bool esp_cpu_exec_interrupt(CPUState *cs, int interrupt_request)
     }
 
     if (accepted) {
-        const bool vectored = (env->mtvec & 3) == 1;
+        /* CLIC IDs 0..15 are local; matrix output N is external ID N + 16. */
+        const bool is_clic_mode = (env->mtvec & 3) == 3 && cpu->clic_mtvt != 0;
+        const uint32_t trap_cause = is_clic_mode ?
+            cause + ESP_CPU_CLIC_EXT_INTR_OFFSET : cause;
+
+        /*
+         * Latch this CPU line as consumed.  Real CLIC hardware tracks the
+         * active interrupt level and will not recursively deliver the same
+         * level when an ISR re-enables MIE for higher-priority nesting.  The
+         * generic RISC-V parent only sees one MEIP level and otherwise keeps
+         * re-entering immediately, overflowing the ISR stack into IRAM code.
+         * The peripheral's next low-to-high transition re-arms this line via
+         * esp_cpu_irq_handler().
+         */
+        CLEAR_BIT(cpu->irq_lines, cause);
+        esp_cpu_update_parent_irq(cpu);
 
         /* Update the mcause and the relevant PC */
-        env->mcause = RISCV_EXCP_INT_FLAG | cause;
+        env->mcause = RISCV_EXCP_INT_FLAG | trap_cause;
 
-        /* Recalculate the PC thanks to the cause */
-        env->pc = (env->mtvec >> 2 << 2) + (vectored ? cause * 4 : 0);
+        if (is_clic_mode) {
+            /*
+             * Espressif's CLIC uses mtvec mode 3 for hardware-vectored
+             * interrupts.  MTVT is an array of absolute 32-bit handler
+             * addresses indexed by the CPU interrupt number.  The parent
+             * RISC-V model does not implement this mode, so perform the
+             * table lookup here after it has applied the normal trap-entry
+             * state changes (mepc/mstatus).
+             */
+            uint32_t handler;
+            /*
+             * IDF configures peripheral interrupts as non-SHV CLIC sources;
+             * they all enter through the common external-interrupt vector.
+             * The application MTVT places that vector at slot 32.
+             */
+            const uint32_t vector_index = 2 * ESP_CPU_CLIC_EXT_INTR_OFFSET;
+            const vaddr entry = cpu->clic_mtvt +
+                                vector_index * sizeof(handler);
+            const int read_result = cpu_memory_rw_debug(cs, entry,
+                (uint8_t *)&handler, sizeof(handler), false);
+
+            if (read_result == 0 && handler != 0) {
+                env->pc = le32_to_cpu(handler);
+            } else {
+                /* Preserve a deterministic trap target if MTVT is invalid.
+                 * Note that in CLIC mode, exceptions jump to mtvec. */
+                env->pc = env->mtvec & ~63;
+            }
+        } else {
+            const bool vectored = (env->mtvec & 3) == 1;
+
+            /* Standard RISC-V direct/vectored mtvec handling. */
+            env->pc = (env->mtvec & ~3) +
+                      (vectored ? trap_cause * 4 : 0);
+        }
     }
 
     /* Similarly, make sure the parent IRQ reflects the current state */
@@ -336,6 +469,12 @@ static void esp_cpu_reset(void *opaque)
     EspRISCVCPU *cpu = opaque;
     cpu->irq_lines = 0;
     cpu->mie_enabled = 0;
+    memset(cpu->pma_cfg, 0, sizeof(cpu->pma_cfg));
+    memset(cpu->pma_addr, 0, sizeof(cpu->pma_addr));
+    cpu->mhcr = 0;
+    cpu->clic_mtvt = 0;
+    cpu->clic_mintstatus = 0;
+    cpu->clic_mintthresh = 0;
     qemu_irq_lower(cpu->parent_irq);
     cpu_reset(CPU(cpu));
 }
@@ -447,6 +586,17 @@ static void esp_cpu_init(Object *obj)
     riscv_set_csr_ops(ESP_CPU_CSR_PCER_M, &esp_cpu_csr_ops);
     riscv_set_csr_ops(ESP_CPU_CSR_PCMR_M, &esp_cpu_csr_ops);
     riscv_set_csr_ops(ESP_CPU_CSR_MCYCLE_M, &esp_cpu_csr_ops);
+
+    /* MHCR (branch-predictor control) is used by the ROM bootloader. */
+    riscv_set_csr_ops(ESP_CPU_CSR_MHCR, &esp_cpu_csr_ops);
+
+    /* CLIC CSRs used by the IDF startup code on the C5 (and successors). */
+    riscv_set_csr_ops(ESP_CPU_CSR_MTVT, &esp_cpu_csr_ops);
+    riscv_set_csr_ops(ESP_CPU_CSR_MINTSTATUS, &esp_cpu_csr_ops);
+    riscv_set_csr_ops(ESP_CPU_CSR_MINTTHRESH, &esp_cpu_csr_ops);
+
+    /* mtvec: allow CLIC mode 3 (the stock write_mtvec() drops modes >= 2). */
+    riscv_set_csr_ops(CSR_MTVEC, &esp_cpu_mtvec_csr_ops);
 
     riscv_set_csr_ops(ESP_CPU_CSR_PCER_U, &esp_cpu_csr_ops);
     riscv_set_csr_ops(ESP_CPU_CSR_PCMR_U, &esp_cpu_csr_ops);

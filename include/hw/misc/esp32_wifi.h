@@ -56,6 +56,10 @@ typedef struct Esp32WifiState {
 
     uint8_t mode;  
 
+    void (*send_frame)(struct Esp32WifiState *s,
+                       struct mac80211_frame *frame,
+                       int length, int signal_strength);
+
 } Esp32WifiState;
 
 #define Esp32_Mode_Station 0

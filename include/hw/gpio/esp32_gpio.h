@@ -20,6 +20,9 @@ typedef struct Esp32GpioState {
     MemoryRegion iomem;
     qemu_irq irq;
     uint32_t strap_mode;
+    /* Offset of the GPIO_STRAP register within the GPIO block.  The ESP32 and
+     * ESP32-C3 use 0x38, while the ESP32-C5 places it at offset 0x0. */
+    uint32_t strap_offset;
 } Esp32GpioState;
 
 typedef struct Esp32GpioClass {

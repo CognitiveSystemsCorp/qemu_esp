@@ -146,6 +146,7 @@ static void esp32_wifi_realize(DeviceState *dev, Error **errp)
     sysbus_init_mmio(sbd, &s->iomem);
     sysbus_init_irq(sbd, &s->irq);
     memset(s->mem,0,sizeof(s->mem));
+    s->send_frame = Esp32_sendFrame;
     Esp32_WLAN_setup_ap(dev, s);
 }
 static Property esp32_wifi_properties[] = {
