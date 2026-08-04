@@ -466,10 +466,14 @@ static void esp32C3_wifi_realize(DeviceState *dev, Error **errp)
     sysbus_init_irq(sbd, &s->irq);
     memset(s->mem,0,sizeof(s->mem));
     s->send_frame = esp32c6_wifi_send_frame;
+    if (s->aps && s->aps[0]) {
+        esp32_wifi_parse_access_points(s->aps);
+    }
     Esp32_WLAN_setup_ap(dev, s);
 }
 static Property esp32C3_wifi_properties[] = {
     DEFINE_NIC_PROPERTIES(Esp32WifiState, conf),
+    DEFINE_PROP_STRING("aps", Esp32WifiState, aps),
     DEFINE_PROP_END_OF_LIST(),
 };
 

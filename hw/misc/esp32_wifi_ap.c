@@ -62,13 +62,62 @@
 #define ANSI_FG_LCOLOR(f) printf("\033[0;%dm", (f) + 30)
 #define ANSI_FG_HCOLOR(f) printf("\033[1;%dm", (f) + 30)
 
-access_point_info access_points[]={
+static access_point_info default_access_points[]={
     {"PICSimLabWifi",1,-25,{0x10,0x01,0x00,0xc4,0x0a,0x56}},
     {"Espressif",5,-30,{0x10,0x01,0x00,0xc4,0x0a,0x51}},
     {"MasseyWifi",10,-40,{0x10,0x01,0x00,0xc4,0x0a,0x52}}
 };
 
-int nb_aps=sizeof(access_points)/sizeof(access_point_info);
+access_point_info *access_points = default_access_points;
+int nb_aps = sizeof(default_access_points)/sizeof(access_point_info);
+
+#define ESP32_WIFI_MAX_CUSTOM_APS 16
+
+static access_point_info custom_access_points[ESP32_WIFI_MAX_CUSTOM_APS];
+static char custom_ap_ssids[ESP32_WIFI_MAX_CUSTOM_APS][33];
+
+void esp32_wifi_parse_access_points(const char *spec)
+{
+    /* BSSIDs are assigned ...:0x60+i so every entry stays unique and cannot
+     * collide with the built-in list. A malformed or empty spec leaves the
+     * built-in list untouched. */
+    int n = 0;
+    char *dup = g_strdup(spec);
+    char *saveptr = NULL;
+
+    for (char *tok = strtok_r(dup, ";", &saveptr);
+         tok && n < ESP32_WIFI_MAX_CUSTOM_APS;
+         tok = strtok_r(NULL, ";", &saveptr)) {
+        char *saveptr2 = NULL;
+        const char *ssid = strtok_r(tok, ":", &saveptr2);
+        const char *ch = strtok_r(NULL, ":", &saveptr2);
+        const char *sig = strtok_r(NULL, ":", &saveptr2);
+        int channel;
+
+        if (!ssid || !ch || !sig) {
+            continue;
+        }
+        channel = atoi(ch);
+        /* esp32c6_wifi_update_scan_channel() only tunes 1..14. */
+        if (channel < 1 || channel > 14) {
+            continue;
+        }
+        strncpy(custom_ap_ssids[n], ssid, 32);
+        custom_ap_ssids[n][32] = 0;
+        custom_access_points[n].ssid = custom_ap_ssids[n];
+        custom_access_points[n].channel = channel;
+        custom_access_points[n].sigstrength = atoi(sig);
+        memcpy(custom_access_points[n].mac_address,
+               (macaddr_t){0x10, 0x01, 0x00, 0xc4, 0x0a, 0x60 + n}, 6);
+        n++;
+    }
+    g_free(dup);
+
+    if (n > 0) {
+        access_points = custom_access_points;
+        nb_aps = n;
+    }
+}
 
 static void Esp32_WLAN_beacon_timer(void *opaque)
 { 

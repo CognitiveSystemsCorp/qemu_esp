@@ -60,6 +60,10 @@ typedef struct Esp32WifiState {
                        struct mac80211_frame *frame,
                        int length, int signal_strength);
 
+    /* "ssid:channel:sigstrength[;...]" — overrides the built-in AP list.
+     * Set per instance via -global driver=esp32c6_wifi,property=aps,... */
+    char *aps;
+
 } Esp32WifiState;
 
 #define Esp32_Mode_Station 0

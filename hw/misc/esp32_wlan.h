@@ -122,6 +122,12 @@ typedef struct access_point_info {
     macaddr_t mac_address;
 } access_point_info;
 
+extern access_point_info *access_points;
+extern int nb_aps;
+/* Replace the built-in AP list from a "ssid:channel:sigstrength[;...]"
+ * spec (the esp32c6_wifi device's "aps" property). */
+void esp32_wifi_parse_access_points(const char *spec);
+
 enum esp32_ap_state {
     Esp32_WLAN__STATE_NOT_AUTHENTICATED,
     Esp32_WLAN__STATE_AUTHENTICATED,
