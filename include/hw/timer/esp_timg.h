@@ -165,6 +165,15 @@ typedef struct ESPTimgClass {
     SysBusDeviceClass parent_class;
     /* Virtual attribute */
     size_t m_has_t1;
+    /* The INT_ENA/RAW/ST/CLR registers use the two-timer bit layout (WDT at
+     * bit 2) even though the target has no T1: on the ESP32-C5 bit 1 is
+     * reserved and the WDT bits stayed at the T0T1 position. */
+    size_t m_wdt_int_bit2;
+    /* Fixed MWDT counter input frequency, for targets whose WDT clock mux
+     * lives in PCR (not modelled). The C5/C6 PCR reset default is XTAL
+     * (48 MHz / 40 MHz) and IDF keeps it. 0 selects the legacy
+     * WDTCONFIG0.USE_XTAL behavior (C3 and older). */
+    uint64_t m_wdt_clk_freq;
 } ESPTimgClass;
 
 
