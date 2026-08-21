@@ -1274,6 +1274,61 @@ static int (* const net_client_init_fun[NET_CLIENT_DRIVER__MAX])(
 #endif /* CONFIG_VMNET */
 };
 
+static void net_reconnect_deleted_peer(const char *name)
+{
+    NetClientState *backends[MAX_QUEUE_NUM];
+    NetClientState *nic_nc;
+    int queues, i, j;
+
+    queues = qemu_find_net_clients_except(name, backends,
+                                          NET_CLIENT_DRIVER_NIC,
+                                          MAX_QUEUE_NUM);
+    if (!queues) {
+        return;
+    }
+
+    QTAILQ_FOREACH(nic_nc, &net_clients, next) {
+        NetClientState *old_backend;
+        NICState *nic;
+
+        if (nic_nc->info->type != NET_CLIENT_DRIVER_NIC ||
+            nic_nc->queue_index != 0 || !nic_nc->peer) {
+            continue;
+        }
+
+        old_backend = nic_nc->peer;
+        nic = qemu_get_nic(nic_nc);
+        if (!nic->peer_deleted || strcmp(old_backend->name, name)) {
+            continue;
+        }
+
+        for (i = 0; i < queues; i++) {
+            NetClientState *queue_nc = qemu_get_subqueue(nic, i);
+
+            for (j = 0; j < queues; j++) {
+                if (backends[j]->queue_index == queue_nc->queue_index) {
+                    /*
+                     * qemu_del_net_client() retained the deleted backend so
+                     * the NIC could safely outlive it. Replace that retained
+                     * peer with the newly-created backend of the same ID.
+                     */
+                    qemu_free_net_client(queue_nc->peer);
+                    queue_nc->peer = backends[j];
+                    backends[j]->peer = queue_nc;
+                    queue_nc->link_down = false;
+                    break;
+                }
+            }
+        }
+        nic->peer_deleted = false;
+
+        if (nic_nc->info->link_status_changed) {
+            nic_nc->info->link_status_changed(nic_nc);
+        }
+        return;
+    }
+}
+
 
 static int net_client_init1(const Netdev *netdev, bool is_netdev, Error **errp)
 {
@@ -1329,6 +1384,7 @@ static int net_client_init1(const Netdev *netdev, bool is_netdev, Error **errp)
         nc = qemu_find_netdev(netdev->id);
         assert(nc);
         nc->is_netdev = true;
+        net_reconnect_deleted_peer(netdev->id);
     }
 
     return 0;
