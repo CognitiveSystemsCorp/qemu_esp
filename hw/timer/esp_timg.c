@@ -150,6 +150,12 @@ static void esp_timg_rtc_cali_check_timeout(ESPTimgState *s, uint32_t value)
 
 static inline uint64_t esp_wdt_ext_clk_frequency(ESPWdtState* wdt)
 {
+    ESPTimgState* state = container_of(wdt, ESPTimgState, wdt);
+    ESPTimgClass* klass = ESP_TIMG_GET_CLASS(state);
+
+    if (klass->m_wdt_clk_freq) {
+        return klass->m_wdt_clk_freq;
+    }
     return FIELD_EX32(wdt->config0, TIMG_WDTCONFIG0, USE_XTAL) ? ESP_XTAL_CLK : ESP_APB_CLK;
 }
 
@@ -493,8 +499,10 @@ static uint64_t esp_timg_read(void *opaque, hwaddr addr, unsigned int size)
      * WDT_bit | T1_bit  | T0_bit
      * On other targets, they are organized as:
      *    0    | WDT_bit | T0_bit
+     * except those with m_wdt_int_bit2 (ESP32-C5), which keep the two-timer
+     * bit positions with bit 1 reserved.
      **/
-    if (klass->m_has_t1) {
+    if (klass->m_has_t1 || klass->m_wdt_int_bit2) {
         wdt_shift = R_TIMG_T0T1_INT_TIMG_WDT_RAW_SHIFT;
         t0_shift  = R_TIMG_T0T1_INT_TIMG_T0_RAW_SHIFT;
         t1_shift  = R_TIMG_T0T1_INT_TIMG_T1_RAW_SHIFT;
@@ -621,8 +629,10 @@ static void esp_timg_write(void *opaque, hwaddr addr,
      * WDT_bit | T1_bit  | T0_bit
      * On other targets, they are organized as:
      *    0    | WDT_bit | T0_bit
+     * except those with m_wdt_int_bit2 (ESP32-C5), which keep the two-timer
+     * bit positions with bit 1 reserved.
      **/
-    if (klass->m_has_t1) {
+    if (klass->m_has_t1 || klass->m_wdt_int_bit2) {
         wdt_mask = R_TIMG_T0T1_INT_TIMG_WDT_RAW_MASK;
         t0_mask  = R_TIMG_T0T1_INT_TIMG_T0_RAW_MASK;
         t1_mask  = R_TIMG_T0T1_INT_TIMG_T1_RAW_MASK;

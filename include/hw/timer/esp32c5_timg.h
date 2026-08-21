@@ -1,5 +1,5 @@
 /*
- * ESP32-C6 Timer Group
+ * ESP32-C5 Timer Group
  *
  * Copyright (c) 2026 Espressif Systems (Shanghai) Co. Ltd.
  *
