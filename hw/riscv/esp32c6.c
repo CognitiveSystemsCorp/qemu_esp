@@ -54,6 +54,7 @@
 #include "hw/timer/esp32c6_systimer.h"
 #include "hw/ssi/esp32c6_spi.h"
 #include "hw/dma/esp32c6_gdma.h"
+#include "hw/misc/esp32c6_rmt.h"
 
 #define ESP32C6_RESET_ADDRESS       0x40000000
 #define ESP32C6_RESET_GPIO_NAME     "esp32c6.machine.reset_gpio"
@@ -95,6 +96,7 @@ struct Esp32C6MachineState {
     ESP32C6I2cAnaMstState i2c_ana_mst;
     ESP32C6ModemState modem;
     ESP32C6ModemSysconState modem_syscon;
+    ESP32C6RmtState rmt;
     Esp32WifiState wifi;
     Esp32PhyaState phya;
     Esp32PhyaState rfbb;
@@ -332,6 +334,7 @@ static void esp32c6_machine_init(MachineState *machine)
     object_initialize_child(OBJECT(machine), "i2c_ana_mst", &ms->i2c_ana_mst, TYPE_ESP32C6_I2C_ANA_MST);
     object_initialize_child(OBJECT(machine), "modem_lpcon", &ms->modem, TYPE_ESP32C6_MODEM);
     object_initialize_child(OBJECT(machine), "modem_syscon", &ms->modem_syscon, TYPE_ESP32C6_MODEM_SYSCON);
+    object_initialize_child(OBJECT(machine), "rmt", &ms->rmt, TYPE_ESP32C6_RMT);
     object_initialize_child(OBJECT(machine), "wifi", &ms->wifi, TYPE_ESP32C6_WIFI);
     object_initialize_child(OBJECT(machine), "phya", &ms->phya, TYPE_ESP32_PHYA);
     object_initialize_child(OBJECT(machine), "rfbb", &ms->rfbb, TYPE_ESP32_PHYA);
@@ -545,6 +548,16 @@ static void esp32c6_machine_init(MachineState *machine)
         sysbus_realize(SYS_BUS_DEVICE(&ms->modem_syscon), &error_fatal);
         MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ms->modem_syscon), 0);
         memory_region_add_subregion_overlap(sys_mem, ESP32C6_MODEM_SYSCON_BASE, mr, 0);
+    }
+
+    /* RMT */
+    {
+        sysbus_realize(SYS_BUS_DEVICE(&ms->rmt), &error_fatal);
+        MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ms->rmt), 0);
+        memory_region_add_subregion_overlap(sys_mem, DR_REG_RMT_BASE, mr, 0);
+        sysbus_connect_irq(SYS_BUS_DEVICE(&ms->rmt), 0,
+                           qdev_get_gpio_in(intmatrix_dev,
+                                           C6_ETS_RMT_INTR_SOURCE));
     }
 
     /* WiFi */

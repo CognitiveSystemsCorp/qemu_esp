@@ -171,6 +171,7 @@ system_ss.add(when: 'CONFIG_RISCV_ESP32C6', if_true: files(
   'esp32_phya.c',
   'esp32c6_wifi.c',
   'esp32c6_pcr.c',
+  'esp32c6_rmt.c',
   'esp32c6_spi_mem.c',
   'esp_sha.c',
   'esp32c3_sha.c',

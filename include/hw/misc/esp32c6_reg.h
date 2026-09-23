@@ -13,6 +13,7 @@
 #define DR_REG_UART_BASE                        0x60000000
 #define DR_REG_UART1_BASE                       0x60001000
 #define DR_REG_SPI1_BASE                        0x60003000
+#define DR_REG_RMT_BASE                         0x60006000
 #define DR_REG_TIMERGROUP0_BASE                 0x60008000
 #define DR_REG_TIMERGROUP1_BASE                 0x60009000
 #define DR_REG_SYSTIMER_BASE                    0x6000A000
@@ -52,6 +53,7 @@
 #define C6_ETS_UART0_INTR_SOURCE                43
 #define C6_ETS_UART1_INTR_SOURCE                44
 #define C6_ETS_USB_SERIAL_JTAG_INTR_SOURCE      48
+#define C6_ETS_RMT_INTR_SOURCE                  49
 #define C6_ETS_TG0_T0_LEVEL_INTR_SOURCE         51
 #define C6_ETS_TG0_WDT_LEVEL_INTR_SOURCE        53
 #define C6_ETS_TG1_T0_LEVEL_INTR_SOURCE         54
