@@ -29,6 +29,12 @@ REG32(PCR_UART0_CONF,    0x000)
 REG32(PCR_MSPI_CLK_CONF, 0x01C)
     FIELD(PCR_MSPI_CLK_CONF, FAST_LS_DIV_NUM, 0,  8)
     FIELD(PCR_MSPI_CLK_CONF, FAST_HS_DIV_NUM, 8,  8)
+REG32(PCR_RMT_CONF,      0x03C)
+    FIELD(PCR_RMT_CONF, CLK_EN, 0, 1)
+    FIELD(PCR_RMT_CONF, RST_EN, 1, 1)
+    FIELD(PCR_RMT_CONF, READY,  2, 1)
+REG32(PCR_RMT_SCLK_CONF, 0x040)
+REG32(PCR_RMT_PD_CTRL,   0x044)
 REG32(SYSCON_RND_DATA,   0x0B0)
 REG32(PCR_ECC_PD_CTRL,   0x0E0)
 REG32(PCR_SYSCLK_CONF,   0x110)
@@ -79,7 +85,9 @@ static uint64_t esp32c5_pcr_read(void *opaque, hwaddr addr, unsigned int size)
     }
 
     case A_PCR_ECC_PD_CTRL:
-        /* Bits 0 and 2 are real ECC memory power-down controls, not generic
+    case A_PCR_RMT_PD_CTRL:
+    case A_PCR_RMT_SCLK_CONF:
+        /* Bits 0 and 2 are real memory power-down / clock controls, not generic
          * peripheral READY indications.  Preserve software writes exactly. */
         return s->regs[index];
 

@@ -190,6 +190,7 @@ system_ss.add(when: 'CONFIG_RISCV_ESP32C5', if_true: files(
   'esp32_phya.c',
   'esp32c5_wifi.c',
   'esp32c5_pcr.c',
+  'esp32c5_rmt.c',
   'esp32c5_spi_mem.c',
   'esp_sha.c',
   'esp32c3_sha.c',
