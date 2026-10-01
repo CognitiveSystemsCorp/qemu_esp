@@ -156,6 +156,13 @@ static void Esp32_WLAN_inject_timer(void *opaque)
         s->send_frame(s, frame, frame->frame_length,
                       frame->signal_strength);
         g_free(frame);
+
+        if (s->nic) {
+            qemu_flush_queued_packets(qemu_get_queue(s->nic));
+        }
+        if (s->espnow_nic) {
+            qemu_flush_queued_packets(qemu_get_queue(s->espnow_nic));
+        }
     }
     if (s->inject_queue_size > 0) {
         // there are more packets... schedule
@@ -383,19 +390,6 @@ void Esp32_WLAN_insert_frame(Esp32WifiState *s, struct mac80211_frame *frame)
 
 static _Bool Esp32_WLAN_can_receive(NetClientState *ncs)
 {
-    Esp32WifiState *s = qemu_get_nic_opaque(ncs);
-    /*
-    if (s->ap_state != Esp32_WLAN__STATE_ASSOCIATED  && s->ap_state != Esp32_WLAN__STATE_STA_ASSOCIATED) {
-        // we are currently not connected
-        // to the access point
-        return 0;
-    }
-    */
-    if (s->inject_queue_size > Esp32_WLAN__MAX_INJECT_QUEUE_SIZE) {
-        // overload, please give me some time...
-        return 0;
-    }
-
     return 1;
 }
 
@@ -405,15 +399,13 @@ static ssize_t Esp32_WLAN_receive(NetClientState *ncs,
     Esp32WifiState *s = qemu_get_nic_opaque(ncs);
     struct mac80211_frame *frame;
     size_t wireless_size = size;
-    if (!Esp32_WLAN_can_receive(ncs)) {
-        // this should not happen, but in
-        // case it does, let's simply drop
-        // the packet
-        return -1;
-    }
 
     if (!s) {
         return -1;
+    }
+
+    if (s->inject_queue_size >= Esp32_WLAN__MAX_INJECT_QUEUE_SIZE) {
+        return size;
     }
 
     /* Ethernet minimum-frame padding is not carried in an 802.11 MSDU. */
@@ -467,11 +459,20 @@ static ssize_t Esp32_WLAN_receive(NetClientState *ncs,
           struct mac80211_frame *reply = NULL;
 
           //discard packages from others channels
-          if((buf[12] & 0x0F) != esp32_wifi_channel) return -1;
+          if((buf[12] & 0x0F) != esp32_wifi_channel) {
+              g_free(frame);
+              return size;
+          }
           //discard packages originated from the same mac address
-          if(!memcmp(&buf[6],s->macaddr,6)) return -1;
+          if(!memcmp(&buf[6],s->macaddr,6)) {
+              g_free(frame);
+              return size;
+          }
           //check destination
-          if((memcmp(&buf[0],BROADCAST,6))&&(memcmp(&buf[0],s->macaddr,6))) return -1;
+          if((memcmp(&buf[0],BROADCAST,6))&&(memcmp(&buf[0],s->macaddr,6))) {
+              g_free(frame);
+              return size;
+          }
 
           //action frame  
           Esp32_WLAN_init_ap_frame(s, frame);
@@ -535,11 +536,20 @@ static ssize_t Esp32_WLAN_receive(NetClientState *ncs,
         {
 
           //discard packages from others channels
-          if((buf[12] & 0x0F) != esp32_wifi_channel) return -1;  
+          if((buf[12] & 0x0F) != esp32_wifi_channel) {
+              g_free(frame);
+              return size;
+          }
           //discard packages originated from the same mac address
-          if(!memcmp(&buf[6],s->macaddr,6)) return -1;
+          if(!memcmp(&buf[6],s->macaddr,6)) {
+              g_free(frame);
+              return size;
+          }
           //check destination
-          if(memcmp(&buf[0],s->macaddr,6)) return -1;
+          if(memcmp(&buf[0],s->macaddr,6)) {
+              g_free(frame);
+              return size;
+          }
 
           Esp32_WLAN_Set_Packet_Status(ESP32_PHYA_ACK);
           timer_mod_anticipate(s->wait_ack_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL));
