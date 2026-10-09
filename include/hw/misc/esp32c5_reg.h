@@ -41,6 +41,7 @@
 #define DR_REG_INTPRI_BASE                      0x600C5000
 #define DR_REG_PLIC_MX_BASE                     0x20001000
 #define DR_REG_PLIC_UX_BASE                     0x20001400
+#define DR_REG_CLIC_CTRL_BASE                   0x20801000
 
 #define ESP32C5_IO_START_ADDR                   (0x60000000)
 #define ESP32C5_UART_COUNT                      2

@@ -52,12 +52,13 @@ static bool line_should_assert(ESP32C5IntMatrixState *s, int line)
         return false;
     }
 
-    /* On the ESP32-C5 the per-line interrupt enable lives in the CPU's mie
-     * CSR (the Espressif MXIE bitmap), written via esp_cpu_intr_enable().
-     * The C5 has no PLIC_MXINT_ENABLE gate, so we gate on `cpu->mie_enabled`
-     * only (populated by guest writes through our custom mie CSR ops in
-     * target/riscv/esp_cpu.c), plus the priority/threshold and source level. */
-    return BIT_SET(s->cpu->mie_enabled, line) &&
+    /* The C5 per-line enable is CLIC_INT_IE.  The Wi-Fi driver routes its
+     * source before installing the handler and only then sets IE, so a
+     * source already asserted at routing must not reach the CPU early.
+     * `cpu->mie_enabled` stays as a second gate for images that mask
+     * through the mie CSR. */
+    return (s->clic_ctrl[line + ESP32C5_CLIC_EXT_OFFSET] & CLIC_INT_IE) &&
+           BIT_SET(s->cpu->mie_enabled, line) &&
            (s->irq_prio[line] >= s->irq_thres) &&
            get_output_line_level(s, line) != 0;
 }
@@ -299,6 +300,42 @@ static const MemoryRegionOps plic_ops = {
 };
 
 /* ------------------------------------------------------------------ */
+/*  Region 2 — CLIC per-interrupt control (IP/IE/ATTR/CTL bytes)      */
+/* ------------------------------------------------------------------ */
+
+static uint64_t clic_read(void *opaque, hwaddr addr, unsigned int size)
+{
+    ESP32C5IntMatrixState *s = ESP32C5_INTMATRIX(opaque);
+    return extract32(s->clic_ctrl[addr / 4], (addr & 3) * 8, size * 8);
+}
+
+static void clic_write(void *opaque, hwaddr addr, uint64_t value,
+                       unsigned int size)
+{
+    ESP32C5IntMatrixState *s = ESP32C5_INTMATRIX(opaque);
+    const uint32_t idx = addr / 4;
+    const uint32_t old = s->clic_ctrl[idx];
+
+    /* IDF writes the IE/ATTR/CTL fields as single bytes. */
+    s->clic_ctrl[idx] = deposit32(old, (addr & 3) * 8, size * 8, value);
+    if (idx >= ESP32C5_CLIC_EXT_OFFSET &&
+        idx - ESP32C5_CLIC_EXT_OFFSET <= ESP32C5_CPU_INT_COUNT &&
+        ((old ^ s->clic_ctrl[idx]) & CLIC_INT_IE)) {
+        update_line(s, idx - ESP32C5_CLIC_EXT_OFFSET);
+    }
+}
+
+static const MemoryRegionOps clic_ops = {
+    .read  = clic_read,
+    .write = clic_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+    .valid.min_access_size = 1,
+    .valid.max_access_size = 4,
+    .impl.min_access_size = 1,
+    .impl.max_access_size = 4,
+};
+
+/* ------------------------------------------------------------------ */
 /*  QOM boilerplate                                                    */
 /* ------------------------------------------------------------------ */
 
@@ -321,6 +358,7 @@ static void esp32c5_intmatrix_reset_hold(Object *obj, ResetType type)
     memset(s->irq_map, 0, sizeof(s->irq_map));
     memset(s->irq_prio, 0, sizeof(s->irq_prio));
     memset(s->line_active_inputs, 0, sizeof(s->line_active_inputs));
+    memset(s->clic_ctrl, 0, sizeof(s->clic_ctrl));
     s->irq_thres = 0;
     s->irq_levels[0] = 0;
     s->irq_levels[1] = 0;
@@ -365,6 +403,11 @@ static void esp32c5_intmatrix_init(Object *obj)
                           TYPE_ESP32C5_INTMATRIX ".plic",
                           ESP32C5_PLIC_IO_SIZE);
     sysbus_init_mmio(sbd, &s->plic_iomem);
+
+    memory_region_init_io(&s->clic_iomem, obj, &clic_ops, s,
+                          TYPE_ESP32C5_INTMATRIX ".clic",
+                          ESP32C5_CLIC_CTRL_IO_SIZE);
+    sysbus_init_mmio(sbd, &s->clic_iomem);
 
     qdev_init_gpio_in(DEVICE(s), irq_handler, ESP32C5_INT_MATRIX_INPUTS);
     qdev_init_gpio_out_named(DEVICE(s), s->out_irqs,

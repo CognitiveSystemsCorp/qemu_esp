@@ -7,7 +7,8 @@
  *
  * This device exposes both as separate MMIO regions (region 0 = mapping,
  * region 1 = PLIC) so the machine code can place them at the correct
- * addresses.
+ * addresses. Region 2 holds the C5 CLIC per-interrupt control registers,
+ * whose IE bit gates each CPU line.
  *
  * Copyright (c) 2026 Espressif Systems (Shanghai) Co. Ltd.
  *
@@ -33,12 +34,17 @@
 
 #define ESP32C5_INTMATRIX_MAP_IO_SIZE  0x800
 #define ESP32C5_PLIC_IO_SIZE           0x400
+#define ESP32C5_CLIC_CTRL_IO_SIZE      0x100
+/* CLIC IDs 0..15 are local; matrix output line N is CLIC ID N + 16. */
+#define ESP32C5_CLIC_EXT_OFFSET        16
+#define CLIC_INT_IE                    BIT(8)
 
 typedef struct ESP32C5IntMatrixState {
     SysBusDevice parent_obj;
 
     MemoryRegion map_iomem;
     MemoryRegion plic_iomem;
+    MemoryRegion clic_iomem;
 
     uint8_t irq_map[ESP32C5_INT_MATRIX_INPUTS];
 
@@ -51,6 +57,8 @@ typedef struct ESP32C5IntMatrixState {
     uint64_t irq_levels[2];
 
     uint8_t line_active_inputs[ESP32C5_CPU_INT_COUNT + 1];
+
+    uint32_t clic_ctrl[ESP32C5_CLIC_CTRL_IO_SIZE / 4];
 
     EspRISCVCPU *cpu;
     qemu_irq out_irqs[ESP32C5_CPU_INT_COUNT + 1];
