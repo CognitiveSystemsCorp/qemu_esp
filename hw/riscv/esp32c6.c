@@ -100,6 +100,9 @@ struct Esp32C6MachineState {
     Esp32WifiState wifi;
     Esp32PhyaState phya;
     Esp32PhyaState rfbb;
+    MemoryRegion saradc;
+    uint32_t saradc_regs[0x100];
+    uint32_t saradc_int_raw;
 };
 
 #define TYPE_ESP32C6_MACHINE MACHINE_TYPE_NAME("esp32c6")
@@ -128,6 +131,76 @@ static void esp32c6_reset_request(void *opaque, int n, int level)
         qemu_system_reset_request(SHUTDOWN_CAUSE_GUEST_RESET);
     }
 }
+
+static uint64_t esp32c6_saradc_read(void *opaque, hwaddr addr,
+                                    unsigned int size)
+{
+    Esp32C6MachineState *ms = opaque;
+    unsigned int idx = addr / 4;
+
+    switch (addr) {
+    case 0x2c: /* APB_SARADC_SAR1DATA_STATUS_REG */
+    case 0x30: { /* APB_SARADC_SAR2DATA_STATUS_REG */
+        uint32_t onetime = ms->saradc_regs[0x20 / 4];
+        uint8_t channel = (onetime >> 25) & 0x0F;
+        if (channel == 0x0F) {
+            /* Internal self-calibration channel */
+            uint16_t dac_code = (ms->i2c_ana_mst.regs[0x69][1] << 8) |
+                                ms->i2c_ana_mst.regs[0x69][0];
+            return (dac_code >= 2048) ? 0 : 1;
+        }
+        return 0x800;
+    }
+    case 0x44: /* APB_SARADC_INT_RAW_REG */
+        return ms->saradc_int_raw | (1U << 31) | (1U << 30);
+    case 0x48: /* APB_SARADC_INT_ST_REG */
+        return (ms->saradc_int_raw | (1U << 31) | (1U << 30)) &
+               ms->saradc_regs[0x40 / 4];
+    case 0x58: /* TSENS / PHY calibration */
+    case 0x64:
+    case 0x68:
+        if (idx < ARRAY_SIZE(ms->saradc_regs) && ms->saradc_regs[idx]) {
+            return ms->saradc_regs[idx];
+        }
+        return 0x800;
+    default:
+        if (idx < ARRAY_SIZE(ms->saradc_regs)) {
+            return ms->saradc_regs[idx];
+        }
+        return 0;
+    }
+}
+
+static void esp32c6_saradc_write(void *opaque, hwaddr addr, uint64_t value,
+                                 unsigned int size)
+{
+    Esp32C6MachineState *ms = opaque;
+    uint32_t val32 = (uint32_t)value;
+    unsigned int idx = addr / 4;
+
+    if (idx < ARRAY_SIZE(ms->saradc_regs)) {
+        ms->saradc_regs[idx] = val32;
+    }
+
+    switch (addr) {
+    case 0x20: /* APB_SARADC_ONETIME_SAMPLE_REG */
+        if (val32 & BIT(29)) { /* APB_SARADC_SARADC_ONETIME_START */
+            ms->saradc_int_raw |= (1U << 31) | (1U << 30);
+        }
+        break;
+    case 0x4c: /* APB_SARADC_INT_CLR_REG */
+        ms->saradc_int_raw &= ~val32;
+        break;
+    default:
+        break;
+    }
+}
+
+static const MemoryRegionOps esp32c6_saradc_ops = {
+    .read = esp32c6_saradc_read,
+    .write = esp32c6_saradc_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+};
 
 static void esp32c6_init_spi_flash(Esp32C6MachineState *ms, BlockBackend *blk)
 {
@@ -655,6 +728,12 @@ static void esp32c6_machine_init(MachineState *machine)
                                qdev_get_gpio_in(intmatrix_dev, C6_ETS_SYSTIMER_TARGET0_INTR_SOURCE + i));
         }
     }
+
+    /* SARADC */
+    memory_region_init_io(&ms->saradc, OBJECT(machine), &esp32c6_saradc_ops,
+                          ms, "esp32c6.saradc", 0x1000);
+    memory_region_add_subregion_overlap(sys_mem, DR_REG_APB_SARADC_BASE,
+                                        &ms->saradc, 0);
 
     /* Catch-all for the entire peripheral address space (priority -1000).
      * Specific devices mapped above at priority 0 take precedence. */

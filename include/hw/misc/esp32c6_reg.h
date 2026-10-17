@@ -18,6 +18,7 @@
 #define DR_REG_TIMERGROUP1_BASE                 0x60009000
 #define DR_REG_SYSTIMER_BASE                    0x6000A000
 #define DR_REG_TWAI_BASE                        0x6000B000
+#define DR_REG_APB_SARADC_BASE                  0x6000E000
 #define DR_REG_USB_SERIAL_JTAG_BASE             0x6000F000
 #define DR_REG_INTERRUPT_BASE                   0x60010000
 #define DR_REG_GDMA_BASE                        0x60080000
