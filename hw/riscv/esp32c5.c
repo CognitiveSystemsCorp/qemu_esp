@@ -387,6 +387,9 @@ static void esp32c5_machine_init(MachineState *machine)
         MemoryRegion *plic_mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ms->intmatrix), 1);
         memory_region_add_subregion_overlap(sys_mem, DR_REG_PLIC_MX_BASE, plic_mr, 0);
 
+        MemoryRegion *clic_mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ms->intmatrix), 2);
+        memory_region_add_subregion_overlap(sys_mem, DR_REG_CLIC_CTRL_BASE, clic_mr, 0);
+
         for (int i = 0; i <= ESP32C5_CPU_INT_COUNT; i++) {
             qemu_irq cpu_input = qdev_get_gpio_in_named(DEVICE(&ms->soc), ESP_CPU_IRQ_LINES_NAME, i);
             qdev_connect_gpio_out_named(intmatrix_dev, ESP32C5_INT_MATRIX_OUTPUT_NAME, i, cpu_input);
