@@ -27,6 +27,7 @@
 #define DR_REG_ECC_MULT_BASE                    0x6008B000
 #define DR_REG_HMAC_BASE                        0x6008D000
 #define DR_REG_DIGITAL_SIGNATURE_BASE           0x6008C000
+#define DR_REG_ECDSA_BASE                       0x6008E000
 #define DR_REG_GPIO_BASE                        0x60091000
 #define DR_REG_SYSTEM_BASE                      0x60095000
 #define DR_REG_SYSCON_BASE                      0x60096000
@@ -72,5 +73,6 @@
 #define C6_ETS_SHA_INTR_SOURCE                  79
 #define C6_ETS_RSA_INTR_SOURCE                  80
 #define C6_ETS_ECC_INTR_SOURCE                  81
+#define C6_ETS_ECDSA_INTR_SOURCE                82
 
 #define ESP32C5_INT_MATRIX_INPUTS               84

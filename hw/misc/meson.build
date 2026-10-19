@@ -185,6 +185,7 @@ system_ss.add(when: 'CONFIG_RISCV_ESP32C5', if_true: files(
   'esp32c5_lp.c',
   'esp32c5_modem.c',
   'esp32c5_ecc.c',
+  'esp32c5_ecdsa.c',
   'esp32_wlan_packet.c',
   'esp32_wifi_ap.c',
   'esp32_phya.c',

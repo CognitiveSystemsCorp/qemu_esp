@@ -330,7 +330,8 @@ static void esp32c5_wifi_send_frame(Esp32WifiState *s,
                      IEEE80211_TYPE_MGT_SUBTYPE_BEACON;
     bool is_espnow = is_mgmt && frame->frame_control.sub_type ==
                      IEEE80211_TYPE_MGT_SUBTYPE_ACTION;
-    bool has_csi = is_beacon || is_espnow;
+    bool csi_enabled = (s->mem[0x98 / 4] & BIT(23)) != 0;
+    bool has_csi = csi_enabled && (is_beacon || is_espnow);
     int csi_len = has_csi ? ESP32C5_WIFI_CSI_LEN : 0;
     int total_len = ESP32C5_WIFI_RX_CTRL_LEN + csi_len + length;
     uint8_t *header=malloc(total_len);

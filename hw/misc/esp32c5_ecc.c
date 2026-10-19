@@ -50,32 +50,52 @@ static bool esp32c5_ecc_do_math(ESP32C5EccState *s)
     gcry_mpi_point_t p = NULL, q = NULL;
     unsigned curve = (s->conf & ECC_MULT_KEY_LENGTH_MASK) >>
                      ECC_MULT_KEY_LENGTH_SHIFT;
-    const char *curve_name = curve == 1 ? "NIST P-256" : "NIST P-192";
+    const char *curve_name;
+    size_t key_len;
+    switch (curve) {
+    case 0:
+        curve_name = "NIST P-192";
+        key_len = 24;
+        break;
+    case 1:
+        curve_name = "NIST P-256";
+        key_len = 32;
+        break;
+    case 2:
+        curve_name = "NIST P-384";
+        key_len = 48;
+        break;
+    default:
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "esp32c5.ecc: unsupported curve %u\n", curve);
+        return false;
+    }
     unsigned mode = (s->conf & ECC_MULT_WORK_MODE_MASK) >>
                     ECC_MULT_WORK_MODE_SHIFT;
-    uint8_t k_buf[32], px_buf[32], py_buf[32];
-    uint8_t px_out[32] = { 0 }, py_out[32] = { 0 };
+    fprintf(stderr, "DEBUG_ECC: start conf=0x%08x curve=%u (%s) mode=%u\n", s->conf, curve, curve_name, mode);
+    uint8_t k_buf[ECC_MULT_MEM_SIZE], px_buf[ECC_MULT_MEM_SIZE], py_buf[ECC_MULT_MEM_SIZE];
+    uint8_t px_out[ECC_MULT_MEM_SIZE] = { 0 }, py_out[ECC_MULT_MEM_SIZE] = { 0 };
     size_t x_len = 0, y_len = 0;
     bool valid;
     bool success = false;
 
     if (gcry_mpi_ec_new(&ctx, NULL, curve_name)) {
         qemu_log_mask(LOG_GUEST_ERROR,
-                      "esp32c5.ecc: cannot create %s context\n", curve_name);
+                       "esp32c5.ecc: cannot create %s context\n", curve_name);
         return false;
     }
 
     /* ESP-IDF writes little-endian integers directly to the accelerator RAM;
      * libgcrypt's USG import/export format is big-endian. */
-    for (int i = 0; i < 32; i++) {
-        k_buf[i] = s->k_mem[31 - i];
-        px_buf[i] = s->px_mem[31 - i];
-        py_buf[i] = s->py_mem[31 - i];
+    for (size_t i = 0; i < key_len; i++) {
+        k_buf[i] = s->k_mem[key_len - 1 - i];
+        px_buf[i] = s->px_mem[key_len - 1 - i];
+        py_buf[i] = s->py_mem[key_len - 1 - i];
     }
 
-    if (gcry_mpi_scan(&scalar, GCRYMPI_FMT_USG, k_buf, 32, NULL) ||
-        gcry_mpi_scan(&px, GCRYMPI_FMT_USG, px_buf, 32, NULL) ||
-        gcry_mpi_scan(&py, GCRYMPI_FMT_USG, py_buf, 32, NULL)) {
+    if (gcry_mpi_scan(&scalar, GCRYMPI_FMT_USG, k_buf, key_len, NULL) ||
+        gcry_mpi_scan(&px, GCRYMPI_FMT_USG, px_buf, key_len, NULL) ||
+        gcry_mpi_scan(&py, GCRYMPI_FMT_USG, py_buf, key_len, NULL)) {
         goto out;
     }
 
@@ -83,8 +103,9 @@ static bool esp32c5_ecc_do_math(ESP32C5EccState *s)
     p = gcry_mpi_point_new(0);
     gcry_mpi_point_set(p, px, py, pz);
     valid = gcry_mpi_ec_curve_point(p, ctx) != 0;
+    fprintf(stderr, "DEBUG_ECC: valid=%d\n", valid);
 
-    /* Modes 2 and 3 expose point validity in CONF bit 8.  The ESP-IDF
+    /* Modes 2 and 3 expose point validity in CONF bit 29.  The ESP-IDF
      * mbedTLS glue explicitly tests this bit and returns an accelerator error
      * when it remains clear. */
     if (mode == ECC_MODE_VERIFY || mode == ECC_MODE_VERIFY_THEN_POINT_MUL) {
@@ -115,20 +136,24 @@ static bool esp32c5_ecc_do_math(ESP32C5EccState *s)
     qx = gcry_mpi_new(0);
     qy = gcry_mpi_new(0);
     if (gcry_mpi_ec_get_affine(qx, qy, q, ctx) ||
-        gcry_mpi_print(GCRYMPI_FMT_USG, px_buf, 32, &x_len, qx) ||
-        gcry_mpi_print(GCRYMPI_FMT_USG, py_buf, 32, &y_len, qy)) {
+        gcry_mpi_print(GCRYMPI_FMT_USG, px_buf, key_len, &x_len, qx) ||
+        gcry_mpi_print(GCRYMPI_FMT_USG, py_buf, key_len, &y_len, qy)) {
         goto out;
     }
 
-    if (x_len <= 32) {
-        memcpy(px_out + (32 - x_len), px_buf, x_len);
+    if (x_len <= key_len) {
+        memcpy(px_out + (key_len - x_len), px_buf, x_len);
     }
-    if (y_len <= 32) {
-        memcpy(py_out + (32 - y_len), py_buf, y_len);
+    if (y_len <= key_len) {
+        memcpy(py_out + (key_len - y_len), py_buf, y_len);
     }
-    for (int i = 0; i < 32; i++) {
-        s->px_mem[31 - i] = px_out[i];
-        s->py_mem[31 - i] = py_out[i];
+    for (size_t i = 0; i < key_len; i++) {
+        s->px_mem[key_len - 1 - i] = px_out[i];
+        s->py_mem[key_len - 1 - i] = py_out[i];
+    }
+    for (size_t i = key_len; i < ECC_MULT_MEM_SIZE; i++) {
+        s->px_mem[i] = 0;
+        s->py_mem[i] = 0;
     }
     success = true;
 
@@ -195,6 +220,8 @@ static uint64_t esp32c5_ecc_read(void *opaque, hwaddr addr, unsigned size)
         return s->int_raw & s->int_ena;
     case ECC_MULT_INT_ENA_REG:
         return s->int_ena;
+    case ECC_MULT_INT_CLR_REG:
+        return 0;
     case ECC_MULT_CONF_REG:
         return s->conf;
     case ECC_MULT_DATE_REG:

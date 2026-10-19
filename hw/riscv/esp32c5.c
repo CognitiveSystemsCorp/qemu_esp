@@ -50,6 +50,7 @@
 #include "hw/misc/esp32c3_aes.h"
 #include "hw/misc/esp32c3_rsa.h"
 #include "hw/misc/esp32c5_ecc.h"
+#include "hw/misc/esp32c5_ecdsa.h"
 #include "hw/timer/esp32c5_timg.h"
 #include "hw/timer/esp32c5_systimer.h"
 #include "hw/ssi/esp32c5_spi.h"
@@ -89,6 +90,7 @@ struct Esp32C6MachineState {
     ESP32C5ShaState sha;
     ESP32C3RsaState rsa;
     ESP32C5EccState ecc;
+    ESP32C5EcdsaState ecdsa;
     ESP32C5UsbJtagState jtag;
     ESP32C5PcrState pcr;
     ESP32C5LpState lp;
@@ -359,6 +361,7 @@ static void esp32c5_machine_init(MachineState *machine)
     object_initialize_child(OBJECT(machine), "sha", &ms->sha, TYPE_ESP32C5_SHA);
     object_initialize_child(OBJECT(machine), "rsa", &ms->rsa, TYPE_ESP32C3_RSA);
     object_initialize_child(OBJECT(machine), "ecc", &ms->ecc, TYPE_ESP32C5_ECC);
+    object_initialize_child(OBJECT(machine), "ecdsa", &ms->ecdsa, TYPE_ESP32C5_ECDSA);
     object_initialize_child(OBJECT(machine), "timg0", &ms->timg[0], TYPE_ESP32C5_TIMG);
     object_initialize_child(OBJECT(machine), "timg1", &ms->timg[1], TYPE_ESP32C5_TIMG);
     object_initialize_child(OBJECT(machine), "systimer", &ms->systimer, TYPE_ESP32C5_SYSTIMER);
@@ -573,6 +576,16 @@ static void esp32c5_machine_init(MachineState *machine)
         sysbus_connect_irq(SYS_BUS_DEVICE(&ms->ecc), 0,
                            qdev_get_gpio_in(intmatrix_dev,
                                            C6_ETS_ECC_INTR_SOURCE));
+    }
+
+    /* ECDSA */
+    {
+        sysbus_realize(SYS_BUS_DEVICE(&ms->ecdsa), &error_fatal);
+        MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ms->ecdsa), 0);
+        memory_region_add_subregion_overlap(sys_mem, DR_REG_ECDSA_BASE, mr, 0);
+        sysbus_connect_irq(SYS_BUS_DEVICE(&ms->ecdsa), 0,
+                           qdev_get_gpio_in(intmatrix_dev,
+                                           C6_ETS_ECDSA_INTR_SOURCE));
     }
 
     /* MODEM_LPCON (modem clock control) */
