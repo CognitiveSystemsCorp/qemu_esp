@@ -483,7 +483,7 @@ static void esp32c6_machine_init(MachineState *machine)
     {
         sysbus_realize(SYS_BUS_DEVICE(&ms->efuse), &error_fatal);
         MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(&ms->efuse), 0);
-        memory_region_add_subregion_overlap(sys_mem, DR_REG_EFUSE_BASE, mr, 0);
+        memory_region_add_subregion_overlap(sys_mem, DR_REG_EFUSE_BASE, mr, 1);
 
         /*
          * IDF's 512-byte QEMU eFuse image stores the factory MAC at 0x165,
