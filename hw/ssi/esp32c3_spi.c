@@ -101,6 +101,9 @@ static uint64_t esp32c3_spi_read(void *opaque, hwaddr addr, unsigned int size)
         case A_SPI_MEM_RD_STATUS:
             r = s->mem_rd_st;
             break;
+        case A_SPI_MEM_CACHE_FCTRL:
+            r = s->mem_cache_fctrl;
+            break;
         case A_SPI_MEM_W0...A_SPI_MEM_W15:
             r = s->data_reg[(addr - A_SPI_MEM_W0) / sizeof(uint32_t)];
             break;
@@ -234,6 +237,16 @@ static void esp32c3_spi_begin_transaction(ESP32C3SpiState *s)
     /* Get the address and its length, in bytes */
     if (s->mem_user & R_SPI_MEM_USER_USR_ADDR_MASK) {
         esp32c3_spi_get_addr(s, &t.addr, &t.addr_bytes);
+        if ((t.cmd == CMD_DIOR || t.cmd == CMD_QIOR) &&
+            t.addr_bytes == 4 &&
+            !(s->mem_cache_fctrl & R_SPI_MEM_CACHE_FCTRL_CACHE_USR_ADDR_4BYTE_MASK)) {
+            /* On chips without dummy-out control (e.g. ESP32-C6), ESP-IDF
+             * extends USR_ADDR_BITLEN by 8 bits (24 -> 32) to clock out the
+             * M7-M0 continuous-read mode byte after a 24-bit address in
+             * mem_addr.  Keep the 24-bit address and let the mode/dummy logic
+             * in esp32c3_spi_perform_transaction() send the mode transfer. */
+            t.addr_bytes = 3;
+        }
         if (t.addr_bytes > 0 && t.addr_bytes <= 4) {
             t.addr = t.addr >> (32 - t.addr_bytes * 8);
         }
@@ -399,6 +412,9 @@ static void esp32c3_spi_write(void *opaque, hwaddr addr,
             break;
         case A_SPI_MEM_RD_STATUS:
             s->mem_rd_st = wvalue;
+            break;
+        case A_SPI_MEM_CACHE_FCTRL:
+            s->mem_cache_fctrl = wvalue;
             break;
         case A_SPI_MEM_W0...A_SPI_MEM_W15:
             s->data_reg[(addr - A_SPI_MEM_W0) / sizeof(uint32_t)] = wvalue;
